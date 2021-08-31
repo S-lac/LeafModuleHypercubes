@@ -1,0 +1,946 @@
+---
+title: "APSIM Output treatments"
+author: "Seb L."
+date: "24 juillet 2017"
+output: html_document
+---
+
+```{r - Libraries, message=FALSE, warning=FALSE, include=FALSE}
+
+library(tidyr)
+library(dplyr)
+library(zoo)
+library(maptools)
+library(rworldmap)
+library(ggplot2)
+library(RColorBrewer)
+library(ggmap)
+library(ggthemes)
+library(ggThemeAssist)
+library(raster)
+library(dismo)
+
+
+```
+
+```{r - Sources, message=FALSE, warning=FALSE, include=FALSE}
+
+
+## Getting all data for harvest dates only :
+Get_Harvest_Data <- function(Output_Sim,By)
+{
+  HarvestDateSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           Temp<-subset(x, day==max(x$day))
+                           return(Temp)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(HarvestDateSim)
+}
+
+GetDataframeToSave <- function(RData,By,Colnames,Scenario) 
+{
+  
+  load(RData)
+  HarvestData <- Get_Harvest_Data(Global_Output,By)
+  rm(Global_Output)
+  HarvestData_Sub <- subset(HarvestData,select=Colnames)
+  rm(HarvestData)
+  HarvestData_Sub$Scenario <- Scenario
+  return(HarvestData_Sub)
+}
+
+## Getting all data for July only :
+Get_July_Data <- function(Output_Sim,By,mon)
+{
+  JulyDataSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           # Get the data we need :
+                           Temp <- subset(x,month==mon)
+                           Temp$MoyT<-(Temp$MaxT+Temp$MinT)/2
+                           ToMean <- select(Temp,MaxT,MinT,MoyT,Radn,waterSD,radn_int)                           
+                           # Aggregate data :
+                           MeanDf <- data.frame(Title=Temp$Title[1],
+                                                year=Temp$year[1],
+                                                Clim=Temp$Clim[1],
+                                                GCM=Temp$GCM[1],
+                                                Tmax=mean(ToMean$MaxT,na.rm=T),
+                                                Tmin=mean(ToMean$MinT,na.rm=T),
+                                                Tmoy=mean(ToMean$MoyT,na.rm=T),
+                                                Radn=mean(ToMean$Radn,na.rm=T),
+                                                Radint=mean(ToMean$radn_int,na.rm=T),
+                                                SD=mean(ToMean$waterSD,na.rm=T))
+                           return(MeanDf)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(JulyDataSim)
+}
+
+## Getting all Boris variables :
+GetVariablesFromDaily <- function(MyGenotypes,scenario,gcm,climat,root)
+{
+
+CollectGarbage <- gc()
+ToSearch <- subset(MyGenotypes,Scenario==scenario & Clim==climat)
+setwd(paste(root,climat,scenario,sep='/'))
+
+load(paste(climat,scenario,gcm,'Global_Output.RData',sep='_'))
+Global_Output$Scenario <- scenario
+Global_Output$GCM <- gcm
+ToSearch$GCM <- gcm
+DailyOptimum <- merge(ToSearch,Global_Output,
+                           by=c('Title','Scenario','Clim','GCM','Genotype'),
+                           all.x=T,all.y=F)
+DailyOptimum_Ordered <-Global_Output
+rm(Global_Output)
+DailyOptimum_Ordered <- DailyOptimum[with(DailyOptimum,
+                                    order(Title,Scenario,GCM,Clim,-year,DaysAfterSowing)),]
+
+# Calculate each variable :
+SowDate <- aggregate(day~Title+Scenario+GCM+Clim+year,subset(DailyOptimum_Ordered,stagename=='sowing'),FUN = min,na.rm=T)
+colnames(SowDate) <- c('Title','Scenario','GCM','Clim','year','SowDate')
+
+FloweringDate <- aggregate(day~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = min,na.rm=T)
+colnames(FloweringDate) <- c('Title','Scenario','GCM','Clim','year','FloweringDate')
+
+HarvestDate <- aggregate(day~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = max,na.rm=T)
+colnames(HarvestDate) <- c('Title','Scenario','GCM','Clim','year','HarvestDate')
+
+Data <- merge(SowDate,FloweringDate,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+Data2 <- merge(Data,HarvestDate,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+ThtFlo <- aggregate(TT~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = min,na.rm=T)
+Data3 <- merge(Data2,ThtFlo,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+Yield <- aggregate(yield~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = max,na.rm=T)
+Data4 <- merge(Data3,Yield,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+WaterSDJuly <- aggregate(waterSD~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = mean,na.rm=T)
+Data5 <- merge(Data4,WaterSDJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+TmaxJuly <- aggregate(MaxT~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = max,na.rm=T)
+Data6 <- merge(Data5,TmaxJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+IncidentLightJuly <- aggregate(Radn~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = mean,na.rm=T)
+Data7 <- merge(Data6,IncidentLightJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+InterceptedLightFlo <- aggregate(radn_int~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = mean,na.rm=T)
+
+Data8 <- merge(Data7,InterceptedLightFlo,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+
+SumInterceptedLight <- aggregate(radn_int~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = sum,na.rm=T)
+colnames(SumInterceptedLight) <- c('Title','Scenario','GCM','Clim','year','sum_radn_int')
+
+Data9 <- merge(Data8,SumInterceptedLight,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+
+
+MyDataToSave_Final <- Data9
+
+return(MyDataToSave_Final)
+
+}
+
+theme_map <- function(base_size = 9, base_family = "") {
+    theme_bw(base_size = base_size, base_family = base_family) %+replace%
+      theme(axis.line = element_blank(),
+            axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_blank(),
+            panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            panel.margin = unit(0, "lines"),
+            plot.background = element_blank(),
+            legend.position = "bottom",
+            legend.direction="horizontal",
+            legend.text=element_text(size=6),
+            legend.box='horizontal')
+}
+
+source('D:/Work/Sims  - DROPS GxE/5.Scripts/MultiSimFunctions.R')
+source('D:/Work/Sims  - DROPS GxE/5.Scripts/Sources.R')
+source('D:/Work/Sims  - DROPS GxE/5.Scripts/ThermalTime.R')
+source('D:/Work/Sims  - DROPS GxE/5.Scripts/APSIMreader.R')
+
+```
+
+# Simulation over the European Network
+
+```{r - Check Evropos, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+
+# Optimums : 
+load('F:/Sebastien/Sims DROPS GxE/3.Data/ClimA_Optimum.RData')
+Optimums <- subset(ClimA_Optimum,Scenario=='Well_Watered')
+
+
+ #On va chercher les noeuds des paramètres initiaux utiles dans les calculs de la nouvelle valeur des paramètres
+Nf_init_Node<-getNodeSet(SimFileTree, paste(c("//","Nfinal"),collapse="") )
+Nfemerg_init_Node<-getNodeSet(SimFileTree, paste(c("//","Leaf_tip_emerg"),collapse="") )
+Phyllo_Node<-getNodeSet(SimFileTree, "//Phy???llochron" )
+ttei_init_Node<-getNodeSet(SimFileTree, paste(c("//","tt_endjuv_to_init"),collapse="") )
+  
+
+#On récupère les valeurs initiales
+Nf_init_Value<-16
+Nfemerg_init_Value<-2
+Phyllo_Value<-0.0193
+ttei_init_Value<-258
+      
+ttef_init<-(Nf_init_Value-Nfemerg_init_Value)/Phyllo_Value 
+#On calcule le temps thermique entre émergence et flag initial
+
+Nf_new<-Optimums$Genotype[Site]
+#On rajoute un tt en fonction de la durée du cycle voulue puis on calcule le NF final correspondant
+
+ChangeXmlValue(Nf_init_Node[site],Nf_new) 
+#On change la valeur du NFfinal dans le xml
+      
+ttei_new<-ttei_init_Value*(Nf_new/Nf_init_Value)
+#Idem pour le temps thermique entre endjuv et init
+      
+ChangeXmlValue(ttei_init_Node[site],ttei_new)
+
+
+```
+
+```{r - Density data for BORIS, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+
+## Genetic groups ----
+Coord_Sites <- read.table('F:/Sebastien/Sims Margot/5- Data/sites_coord.csv', 
+                       sep=",",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,
+                       as.is=FALSE, 
+                       fill=TRUE)
+
+## Old densities : ----
+OldDensity<-xmlTreeParse('F:/Sebastien/Sims Margot/1- ApsimFiles/Old_ClimA_Rainfed.apsim',
+                         getDTD = F , useInternalNodes = T)
+OldDensities <- xpathSApply(OldDensity, '//density',xmlValue)
+Sims <- xpathSApply(OldDensity, "//*/simulation/@name")
+
+
+## New densitites : ----
+NewDensity<-xmlTreeParse('F:/Sebastien/Sims Margot/2- miniAPSIM/miniAPSIM/Model/NoG1_Density_ClimA_Well_Watered.apsim',
+                         getDTD = F , useInternalNodes = T)
+NewDensities <- xpathSApply(NewDensity, '//density',xmlValue)
+Sims <- xpathSApply(OldDensity, "//*/simulation/@name")
+
+## Final Df : ----
+Densities_Df <- data.frame("Title"=Sims,
+                           "Old_Density"=as.numeric(OldDensities),
+                           "New_Density"=as.numeric(NewDensities))
+
+write.csv(Densities_Df,file ='F:/Sebastien/Sims DROPS GxE/3.Data/Densities_Df.csv')
+
+```
+
+```{r - Location Map, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+###Chargement de la carte du monde (fortity --> permet d'utiliser ggplot)
+WorldMap <- getMap(resolution = "low")
+WorldMap2 <- fortify(WorldMap)
+  
+##Relief
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+Alt<-getData('worldclim',var="alt",res=10)
+ALT<-as.data.frame(Alt,xy=TRUE,na.rm=TRUE)
+names(ALT)<-c('long','lat','alt')
+test<-subset(ALT,long>=min(Site_coord$Lon)-1 & long<=max(Site_coord$Lon)+1 
+             & lat>=min(Site_coord$Lat)-1 & lat <=max(Site_coord$Lat)+1)
+ALTITUDE<-subset(test,alt>850)
+names(ALTITUDE)<-c('LON','LAT','ALT')
+  
+####Selection des pays non ?tudi?s sur la carte d'Europe
+England<-subset(WorldMap2,id=="United Kingdom")
+  
+###Couche Oc?an
+setwd("D:/Work/Sims  - DROPS GxE/3.Data/ne_50m_ocean")
+Ocean<-readShapePoly("ne_50m_ocean.shp")
+Ocean2<-fortify(Ocean)
+
+#####2. Sites MAP#####
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord_map<-read.table('sites_coord_carte.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord_map$site<-as.factor(Site_coord_map$site)
+
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+Site_coord$City <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][2]) 
+Site_coord$Country <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][1]) 
+
+# Map with only points !#####
+ggplot(Site_coord,aes(Lon,Lat))+
+  geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+  geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+  geom_point(data=Site_coord, size=8)+
+  geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+  #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+  theme_map()+
+  coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                 ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                 expand=FALSE)
+
+```
+
+```{r - Load Params genotypes, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+######### REAL PARAMETERS ############
+
+## Load and treat parameters for simulation :
+Parameters <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_DROPS_Panel_ForAPSIM.csv', 
+                         sep=",", header=TRUE,dec=".",row.names=NULL,as.is=FALSE, fill=TRUE)
+
+Parameters$respTnight <- -Parameters$Res.Tnight
+MyParams <- subset(Parameters,select=colnames(Parameters)[c(2,8,9,16)])
+
+ParamsB73 <- subset(MyParams,Hybrid_ID=='B73_H')
+Scale_a <- 3.5/ParamsB73$a
+Scale_c <- 3.5/ParamsB73$c
+MyParams$a <- MyParams$a*Scale_a
+MyParams$c <- MyParams$c*Scale_c
+MyParams$b <- (-0.0758*MyParams$c)-0.3672
+MyParams$c0 <- MyParams$a / MyParams$c
+
+colnames(MyParams)[1] <- 'Genotype'
+
+######### GRID OF PARAMETERS ############
+
+## Build the vector of parameters : 
+Range_a <- quantile(MyParams$a , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+Range_c <- quantile(MyParams$c , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+Range_SensiRAD <- quantile(MyParams$SensiRAD , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+
+GridOfParameters <- expand.grid(Range_a,Range_c,Range_SensiRAD)
+colnames(GridOfParameters) <- c('a','c','SensiRAD')
+GridOfParameters$c0 <- GridOfParameters$a / GridOfParameters$c
+GridOfParameters$Hybrid_ID <- seq(1,nrow(GridOfParameters))
+
+colnames(GridOfParameters)[5] <- 'Genotype'
+
+```
+
+## Actual Climate - Real genotypes
+
+
+```{r - Load Params genotypes Simulations - Irrigation, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+
+#################### IRRIGATED : #####################
+setwd('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Irr')
+load('Global_Output_Grille_WW.RData')
+
+# Get Harvest Data : 
+OutputGrille_Irr <- Global_Output_Grille
+OutputGrille_Irr$Scenario <- 'Irr'
+rm(Global_Output_Grille)
+
+
+for (Geno in unique(OutputGrille_Irr$Genotype))
+{
+  print(paste0('select genotype ',Geno,'...'))
+  ToTreat <- subset(OutputGrille_Irr,Genotype==Geno)
+  print(paste0('get harvest data...'))
+  HarvestData <- Get_Harvest_Data(ToTreat,list(ToTreat$year,ToTreat$Title))
+  if (Geno ==1)
+  {
+    HarvestDataGrille_Irr <- HarvestData
+  } else {HarvestDataGrille_Irr <- rbind(HarvestDataGrille_Irr,HarvestData)}
+  
+  print('All Good !')  
+}
+
+save(HarvestDataGrille_Irr,file='HarvestDataGrille_Irr')
+
+# If already done : 
+load('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Irr/HarvestDataGrille_Irr')
+
+```
+
+```{r - Load Params genotypes Simulations - Rainfed, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+
+#################### IRRIGATED : #####################
+setwd('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Rainfed')
+load('Global_Output_Grille_WW.RData')
+
+# Get Harvest Data : 
+OutputGrille_Rainfed <- Global_Output_Grille
+OutputGrille_Rainfed$Scenario <- 'Rainfed'
+rm(Global_Output_Grille)
+
+
+for (Geno in unique(OutputGrille_Rainfed$Genotype))
+{
+  print(paste0('select genotype ',Geno,'...'))
+  ToTreat <- subset(OutputGrille_Rainfed,Genotype==Geno)
+  print(paste0('get harvest data...'))
+  HarvestData <- Get_Harvest_Data(ToTreat,list(ToTreat$year,ToTreat$Title))
+  if (Geno ==1)
+  {
+    HarvestDataGrille_Rainfed <- HarvestData
+  } else {HarvestDataGrille_Rainfed <- rbind(HarvestDataGrille_Rainfed,HarvestData)}
+  
+  print('All Good !')  
+}
+
+save(HarvestDataGrille_Rainfed,file='HarvestDataGrille_Rainfed')
+
+
+load('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Rainfed/HarvestDataGrille_Rainfed')
+
+```
+
+```{r - Load Params genotypes Simulations - Well-watered, echo=FALSE, fig.height=7, fig.width=7, warning=FALSE}
+
+
+#################### IRRIGATED : #####################
+setwd('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Well_Watered')
+load('Global_Output_Grille.RData')
+
+
+# Get Harvest Data : 
+OutputGrille_Well_Watered <- Global_Output_Grille
+OutputGrille_Well_Watered$Scenario <- 'Well_Watered'
+rm(Global_Output_Grille)
+
+
+for (Geno in unique(OutputGrille_Well_Watered$Genotype))
+{
+  print(paste0('select genotype ',Geno,'...'))
+  ToTreat <- subset(OutputGrille_Well_Watered,Genotype==Geno)
+  print(paste0('get harvest data...'))
+  HarvestData <- Get_Harvest_Data(ToTreat,list(ToTreat$year,ToTreat$Title))
+  if (Geno ==1)
+  {
+    HarvestDataGrille_Well_Watered <- HarvestData
+  } else {HarvestDataGrille_Well_Watered <- rbind(HarvestDataGrille_Well_Watered,HarvestData)}
+  
+  print('All Good !')  
+}
+
+save(HarvestDataGrille_Well_Watered,file='HarvestDataGrille_Well_Watered')
+
+load('D:/Work/Sims  - DROPS GxE/4.Out/ClimA/Well_Watered/HarvestDataGrille_Well_Watered')
+
+
+```
+
+```{r, ClimA - Grille - All Data together - Test results }
+
+HarvestDataGrille_Well_Watered$yield <- HarvestDataGrille_Well_Watered$yield + 2000
+
+Output_Grille <- bind_rows(HarvestDataGrille_Rainfed,HarvestDataGrille_Irr,HarvestDataGrille_Well_Watered)
+colnames(Site_coord) <- c('Lon','Lat','Title','City','Country')
+Merged_Outputs <- merge(Output_Grille,Site_coord)
+
+IDs <- which(Merged_Outputs$Country==' Greece')
+Merged_Outputs$yield[IDs] <- Merged_Outputs$yield[IDs] + 3000
+
+
+``` 
+
+```{r, ClimA - Grille - Load & Have_a_Look at Outputs }
+
+Merged_Outputs$Scenario <- factor(Merged_Outputs$Scenario, levels = c("Rainfed", "Irr", "Well_Watered"))
+
+p_yield <- ggplot(data=Merged_Outputs,aes(y=yield,x=Country,color=Scenario))+
+  geom_boxplot()+
+  labs(x=' ',y='Yield (kg/ha)')
+
+p_biomass <- ggplot(data=Merged_Outputs,aes(y=biomass,x=reorder(Country,yield,FUN=mean,na.rm=T),color=Scenario))+
+  geom_boxplot()+
+  labs(x=' ',y='Biomass (kg/ha)')
+
+
+p_lai <- ggplot(data=Merged_Outputs,aes(y=lai,x=reorder(Country,yield,FUN=mean,na.rm=T),color=Scenario))+
+  geom_boxplot()+
+  labs(x=' ',y='lai (m?leaf/m?soil)')
+
+plot_grid(p_yield,p_biomass,p_lai, nrow = 3)
+
+```
+
+```{r, ClimA - Grille - Finding the best genotype - Mapping best parameters }
+
+BestGenotype <- aggregate(yield~Title+Scenario,Merged_Outputs,FUN=max,na.rm=T)
+
+BestGenotypeAndParams <- merge(BestGenotype,Merged_Outputs)
+  
+SubsetBestGenotype <- subset(BestGenotypeAndParams,select=c('Title','yield','Genotype','Scenario','Lon','Lat'))
+
+BestGenotypeValuesAndParams <- merge(SubsetBestGenotype,GridOfParameters,by=c('Genotype'))
+
+
+
+p_a <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=a))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf potential growth\n (mm/dd)",low='red',high='green')
+
+p_c0 <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=c0))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf growth sensitivity\nto water deficit (c0 - kPa)",low='red',high='green')
+
+
+p_RAD <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=SensiRAD))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf growth sensitivity\nto radiation (SensiRAD - cm/MJ)",low='red',high='green')
+
+plot_grid(p_a,p_c0,p_RAD, nrow = 3,labels='AUTO')
+
+
+```
+
+```{r, ClimA - Grille - Finding the best genotype - Mapping best parametersCrosing values }
+
+Select <- subset(Merged_Outputs,select=c('Title','yield','Genotype'))
+OutputsAndParams <- merge(Select,GridOfParameters,by=c('Genotype'))
+OutputsAndParams_BaseAvalue <- subset(OutputsAndParams,a==unique(OutputsAndParams$a)[4])
+
+
+
+
+BestGenotype <- aggregate(yield~Title+Scenario,Merged_Outputs,FUN=max,na.rm=T)
+
+BestGenotypeAndParams <- merge(BestGenotype,Merged_Outputs)
+  
+SubsetBestGenotype <- subset(BestGenotypeAndParams,select=c('Title','yield','Genotype','Scenario','Lon','Lat'))
+
+BestGenotypeValuesAndParams <- merge(SubsetBestGenotype,GridOfParameters,by=c('Genotype'))
+
+
+p_a <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=a))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf potential growth\n (mm/dd)",low='red',high='green')
+
+p_c0 <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=c0))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf growth sensitivity\nto water deficit (c0 - kPa)",low='red',high='green')
+
+
+p_RAD <- ggplot(BestGenotypeValuesAndParams,aes(Lon,Lat,color=SensiRAD))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=BestGenotypeValuesAndParams, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            facet_wrap(~Scenario)+
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(name="Leaf growth sensitivity\nto radiation (SensiRAD - cm/MJ)",low='red',high='green')
+
+plot_grid(p_a,p_c0,p_RAD, nrow = 3,labels='AUTO')
+
+
+```
+
+
+```{r, ClimA - Grille - Mapping Outputs - B73_H}
+
+# Map results Mean : 
+B73_Data <- subset(Data,Genotype=='B73_H')
+
+MeanPerSite <- aggregate(cbind(yield,biomass,lai)~Title,B73_Data,FUN=mean,na.rm=T)
+
+ToPlot <- merge(Site_coord,MeanPerSite,by='Title')
+p_yield <- ggplot(ToPlot,aes(Lon,Lat,color=yield/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+p_biomass <- ggplot(ToPlot,aes(Lon,Lat,color=biomass/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+
+p_lai <- ggplot(ToPlot,aes(Lon,Lat,color=lai))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+plot_grid(p_yield,p_biomass,p_lai, labels = c('Mean Yield','Mean Biomass','Mean LAI'), ncol = 3)
+
+
+# Map results Max : 
+MaxPerSite <- aggregate(cbind(yield,biomass,lai)~Title,B73_Data,FUN=max,na.rm=T)
+ToPlot <- merge(Site_coord,MaxPerSite,by='Title')
+p_yield <- ggplot(ToPlot,aes(Lon,Lat,color=yield/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+p_biomass <- ggplot(ToPlot,aes(Lon,Lat,color=biomass/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+
+p_lai <- ggplot(ToPlot,aes(Lon,Lat,color=lai))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+plot_grid(p_yield,p_biomass,p_lai, labels = c('Max Yield','Max Biomass','Max LAI'), ncol = 3)
+
+```
+
+```{r, ClimA - Real Geno - Mapping Outputs - All Hybrids}
+
+# Map results Mean : 
+
+MeanPerSite <- aggregate(cbind(yield,biomass,lai)~Title+Scenario,Data,FUN=mean,na.rm=T)
+ToPlot <- merge(Site_coord,subset(MeanPerSite,Scenario=='Irr'),by='Title')
+
+ggplot(ToPlot,aes(Lon,Lat,color=yield/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+p_yield <- ggplot(ToPlot,aes(Lon,Lat,color=yield/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+p_biomass <- ggplot(ToPlot,aes(Lon,Lat,color=biomass/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+
+p_lai <- ggplot(ToPlot,aes(Lon,Lat,color=lai))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+plot_grid(p_yield,p_biomass,p_lai, labels = c('Mean Yield','Mean Biomass','Mean LAI'), ncol = 3)
+
+
+# Map results Max : 
+MaxPerSite <- aggregate(cbind(yield,biomass,lai)~Title,Merged_Outputs,FUN=max,na.rm=T)
+ToPlot <- merge(Site_coord,MaxPerSite,by='Title')
+p_yield <- ggplot(ToPlot,aes(Lon,Lat,color=yield/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+p_biomass <- ggplot(ToPlot,aes(Lon,Lat,color=biomass/1000))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+
+p_lai <- ggplot(ToPlot,aes(Lon,Lat,color=lai))+
+            geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+            geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+            geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+            geom_point(data=ToPlot, size=5)+
+            geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+            #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+            theme_map()+
+            coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                           ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                           expand=FALSE)+
+            scale_color_gradient(low='red',high='green')
+
+plot_grid(p_yield,p_biomass,p_lai, labels = c('Max Yield','Max Biomass','Max LAI'), ncol = 3)
+
+```
+
+```{r, ClimA - Real Geno - Yield Study}
+
+Merged_Outputs <- bind_rows(Merged_Outputs_Irr,Merged_Outputs_Rainfed,Merged_Outputs_Well_Watered)
+Merged_Outputs <- Merged_Outputs_Well_Watered
+
+ggplot(data=Merged_Outputs,aes(y=yield,x=reorder(Country,yield,FUN=mean,na.rm=T),color=Scenario))+
+  geom_boxplot()+
+  labs(x=' ',y='Yield (t/ha)')
+
+colnames(MyParams) <- c("Genotype","a","c","SensiRAD")
+
+MeanPerSiteAndgenotype <- aggregate(yield~Genotype+Title+Scenario,Merged_Outputs,FUN=mean,na.rm=T)
+
+BestGenotypePerSite <- aggregate(yield~Title,
+                                 MeanPerSiteAndgenotype,FUN=max,na.rm=T)
+
+BestGenotype <- merge(BestGenotypePerSite,MeanPerSiteAndgenotype)
+
+BestGenotypeWithParams <- merge(BestGenotype,MyParams,all.x=T,all.y=F,by='Genotype')
+
+BestGenotypeWithParams_AndCoord <- merge(BestGenotypeWithParams,Site_coord,all.x=T,all.y=F)
+
+```
+
+```{r, ClimA - Best Geno - Mapping each param}
+
+Melted_ToPlot <- melt(BestGenotypeWithParams_AndCoord,measure.vars=c('a','c','SensiRAD'))
+Plots <- list()
+i <- 1
+for (var in unique(Melted_ToPlot$variable))
+{
+  # Map with only points !#####
+  ToPlot <- subset(Melted_ToPlot,variable==var)
+  Plots[[i]] <- ggplot(ToPlot,aes(Lon,Lat,color=value))+
+                    geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+                    geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+                    geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+                    geom_point(data=ToPlot, size=4)+
+                    scale_color_gradient(low='green',high='red')+
+                    ggtitle(as.character(var))+
+                    geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+                    theme_map()+
+                    coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                                   ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                                   expand=FALSE)
+  i <- i+1
+}
+
+plot_grid(plotlist = Plots, labels = "AUTO", ncol = 3)
+
+
+ggplot(Melted_ToPlot,aes(x=Lat,y=value,color=Genotype))+
+  geom_point(size=2)+
+  facet_wrap(~variable,scales='free')+
+  geom_smooth(method='lm',color='black')+
+  labs(x='Parameter Value',y='Latitude')
+
+
+###### Put best genotype in distribution :
+Melted_AllGeno <- melt(merge(MeanPerSiteAndgenotype,MyParams),measure.vars=c('a','c','respTnight'))
+Melted_AllGeno <- merge(Melted_AllGeno,Site_coord)
+Melted_BestGeno <- Melted_ToPlot
+ToPlotBestGeno <- melt(subset(MyParams,Genotype==))
+
+ggplot(Melted_ToPlot,aes(x=value))+
+  geom_histogram()+
+  geom_vline(data=)
+  facet_wrap(~variable,scales='free')+
+  geom_smooth(method='lm',color='black')+
+  labs(x='Parameter Value',y='Latitude')
+
+
+```
+
+```{r, ClimA - Real Geno - Parameters effect on yield}
+
+ForAnova <- merge(Merged_Outputs,MyParams,all.x=T,all.y=F)
+
+Anova(lm(data=ForAnova,
+         formula='yield~a+c+SensiRAD+a*c-1'),type="III")
+
+Anova(lm(data=ForAnova,
+         formula='biomass~a+c+SensiRAD+a*c-1'),type="III")
+
+Anova(lm(data=ForAnova,
+         formula='lai~a+c+SensiRAD+a*c-1'),type="III")
+
+```
+
+```{r, ClimA - Real Geno - Response Surfaces of yield to each param}
+
+VarAndParams <- merge(MeanPerSiteAndgenotype,MyParams,all.x=T,all.y=F)
+VarAndParamsAndCoord <-  merge(VarAndParams,Site_coord,all.x=T,all.y=F)
+Melted_VarParams <- melt(VarAndParamsAndCoord,measure.vars=c('a','c','b','potKernelWt','GNmax','respTnight'))
+
+ToPlot <- Melted_VarParams[,c(1:3,8:10)]
+
+ggplot(data=ToPlot,aes(x=value,y=yield/1000,color=Title))+
+  #geom_point()+
+  geom_smooth(method='lm',se=F,size=1)+
+  geom_smooth(method='lm',color='black',size=3)+
+  facet_wrap(~variable,scales='free')+
+  theme(legend.position='none')+
+  labs(x='',y='Yield (t/ha)')
+
+
+#############################################################################
+Melted_VarParams <- melt(VarAndParamsAndCoord,measure.vars=c('a','c','SensiRAD'))
+
+
+Test <- aggregate(yield~Title,subset(Melted_VarParams,Genotype!='PHZ51_H'),FUN=max,na.rm=T)
+Test_2 <- merge(Test,VarAndParamsAndCoord,all.x=T,all.y=F)
+Params <- subset(MyParams,Genotype=='LH39_H')
+Melt_ToPlot <- melt(Params,measure.vars=c('a','c','SensiRAD'))
+ ggplot(nba.m, aes(variable, Name)) + geom_tile(aes(fill = rescale),
+     colour = "white") + scale_fill_gradient(low = "white",high = "steelblue")
+
+
+
+ggplot(data=subset(Melted_VarParams,Genotype!='PHZ51_H'),aes(x=value))+
+  geom_histogram(aes(y = (..count..)/sum(..count..)))+
+  geom_vline(data=Melt_ToPlot,aes(xintercept=value),color='red')+
+  facet_grid(~variable,scales='free', switch = "x", 
+             labeller = as_labeller(c(a = "a (mm/dd)", c = "c (mm/dd.MPa)",SensiRAD="sensiRAD (cm.m?/MJ") ))+
+  labs(x='',y='frequency')
+
+
+MyParams$C0 <- MyParams$a / MyParams$c
+
+chart.Correlation(subset(MyParams,Genotype!='PHZ51_H')[c(2,3,5,4)], histogram=TRUE, pch=15)
+
+
+```
+
+

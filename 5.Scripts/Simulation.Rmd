@@ -1,0 +1,908 @@
+---
+title: "DROPS | Multi - Genotype Simulation"
+author: "Sebastien Lacube"
+date: "22 March 2017"
+output: html_document
+---
+
+
+```{r "setup", include=FALSE}
+
+knitr::opts_chunk$set(
+	message = FALSE,
+	warning = FALSE
+)
+
+require("knitr")
+opts_knit$set(root.dir = "D:/Perso/Papier-2020")
+
+# Optional :
+rm(list=ls())
+
+
+theme_map <- function(base_size = 9, base_family = "") {
+    theme_bw(base_size = base_size, base_family = base_family) %+replace%
+      theme(axis.line = element_blank(),
+            axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_blank(),
+            panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            panel.margin = unit(0, "lines"),
+            plot.background = element_blank(),
+            legend.position = "bottom",
+            legend.title=element_text(),
+            legend.direction="horizontal",
+            legend.text=element_text(size=6),
+            legend.box='horizontal')
+  }
+```
+
+```{r Packages - Sources, message=FALSE, warning=FALSE, include=FALSE}
+
+## Packages ---- 
+library(PerformanceAnalytics)
+library(Hmisc)
+library(dplyr)
+library(R.utils)
+library(rmarkdown)
+library(scales)
+library(XML)
+library(rworldmap)
+library(raster)
+library(reshape2)
+library(maptools)
+
+## Sources ----
+source('D:/Perso/Papier-2020/5.Scripts/MultiSimFunctions.r')
+# source('D:/Perso/Papier-2020/5.Scripts/Sources.R')
+source('D:/Perso/Papier-2020/5.Scripts/ThermalTime.R', encoding = 'UTF-8')
+
+```
+
+```{r Paths, message=FALSE, warning=FALSE, include=FALSE}
+
+## ---------------
+# 1 : APSIM files 
+# 2 : Met files 
+# 3 : Data files
+# 4 : Out files
+# 5 : Scripts
+# 6 : Docs 
+# 7 : Junk
+## ---------------
+
+
+PATHS <- list.dirs(path = "D:/Perso/Papier-2020",recursive = FALSE)
+SimName <- 'Base_Sims'
+
+PATH.APSIM <- 'D:/APSIM/Apsim76/Model/'
+
+```
+
+# Simulation of 'bounded' and 'unbounded' phenotypic space 
+
+Simulation of 250+ genotypes of the DROPS panel to test performances of each hybrid around the network of 59 sites around Europe  
+that's for 6x6x6 
+
+***
+
+```{r Load Base Sim, echo=FALSE, fig.height=8, fig.width=10, message=FALSE}
+
+
+###Chargement de la carte du monde (fortity --> permet d'utiliser ggplot)
+WorldMap <- getMap(resolution = "low")
+WorldMap2 <- fortify(WorldMap)
+  
+  
+##Relief
+setwd(PATHS[3])
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+
+Alt<-getData("worldclim",var="alt",res=10)
+ALT<-as.data.frame(Alt,xy=TRUE,na.rm=TRUE)
+names(ALT)<-c('long','lat','alt')
+test<-subset(ALT,long>=min(Site_coord$Lon)-1 & long<=max(Site_coord$Lon)+1 
+             & lat>=min(Site_coord$Lat)-1 & lat <=max(Site_coord$Lat)+1)
+ALTITUDE<-subset(test,alt>850)
+names(ALTITUDE)<-c('LON','LAT','ALT')
+  
+####Selection des pays non ?tudi?s sur la carte d'Europe
+England<-subset(WorldMap2,id=="United Kingdom")
+  
+###Couche Oc?an
+setwd(file.path(PATHS[3],'ne_50m_ocean'))
+Ocean<-readShapePoly("ne_50m_ocean.shp")
+Ocean2<-fortify(Ocean)
+
+#####2. Sites MAP#####
+setwd(PATHS[3])
+Site_coord_map<-read.table('sites_coord_carte.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord_map$site<-as.factor(Site_coord_map$site)
+
+setwd(PATHS[3])
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+Site_coord$City <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][2]) 
+Site_coord$Country <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][1]) 
+
+
+# Map with only points !#####
+ggplot(Site_coord,aes(Lon,Lat))+
+  geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+  geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+  geom_point(data=Site_coord, size=5)+
+  geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+  #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+  theme_map()+
+  coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                 ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                 expand=FALSE)
+
+```
+
+## Summary  :
+
+- *Sites :* 59 Sites around JRC network  
+
+- *Genotypes :* DROPS panel (250+) // 6x6x6 virtual genotypes
+
+- *Year :* from 1975-2010
+
+- *Climate :* Actual  
+
+- *Hydric scenario :* Well-watered / Water deficit (grobbed together in scenarios)
+
+- *Model :* LER model with length/width  + Effect of Tnight + effect of b and c on Grain number (PGRbase model)
+
+***
+
+## Map of sites : 
+
+```{r Load Base Sim, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+# Loading XML file : ----
+ApsimFile<-paste(PATHS[1],SimName,sep='/')
+ApsimFile<-paste(ApsimFile,'apsim',sep='.')
+SimFileTree<-xmlTreeParse(ApsimFile,getDTD = F , useInternalNodes = T)
+  
+# List of SimNames :
+SimulationNameNode<-getNodeSet(SimFileTree, "//simulation")
+xattrs <- xpathSApply(SimFileTree, "//*/simulation/@name")
+Sims <- data.frame("Title"=xattrs)
+
+```
+
+## Input parameters :
+
+Maize genotypic parameters :
+
+```{r Load maize parameters, echo=FALSE, message=FALSE, warning=FALSE}
+
+TopNode <- xmlRoot(SimFileTree)
+TagNames <- xmlElementsByTagName(TopNode, 'simulation', recursive = FALSE)
+TagNames <- TagNames[[1]]
+TagNames <- xmlElementsByTagName(TagNames, 'area', recursive = FALSE)
+TagNames <- xmlElementsByTagName(TagNames[[1]], 'maize', recursive = FALSE)
+TagNames_Csts <- xmlElementsByTagName(TagNames[[1]], 'maizeConstants', recursive = FALSE)
+TagNames_Geno <- xmlElementsByTagName(TagNames[[1]], 'maizeGenotype', recursive = FALSE)
+
+# Get genotypic info and parameters : ----
+Constants <<- melt(getChildrenStrings(TagNames_Csts[[1]],asVector=F,addNames=T))
+Genotype <<- melt(getChildrenStrings(TagNames_Geno[[1]],asVector=F,addNames=T))
+
+colnames(Genotype)     <- c('Parameter','Value') 
+
+```
+
+Measured genotypic parameters : 
+
+```{r Load Data parameters from the 250 genotypes, message=FALSE, warning=FALSE, include=FALSE}
+
+
+## Genotypes data ----
+Parameters <- read.table(paste0(PATHS[3],'/Parameters_DROPS_Panel_ForAPSIM_WithNA.csv'), 
+                       sep=",",                                           
+                       header=TRUE,dec=".",
+                       as.is=FALSE, 
+                       row.names = NULL,
+                       fill=TRUE)
+
+colnames(Parameters)[1] <- "Hybrid_No"
+```
+
+- Phyllochron + intercept
+
+- Ligulation + intercept
+
+- Maximum number of leaves
+
+```{r Params Phyllo / Ligules, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+ggplot(Parameters,aes(x=Phyllochron)) +
+   geom_histogram(aes(y=..count../sum(..count..)),binwidth = 0.0015)+
+   theme_light()+
+   labs(x='Leaf appearance rate (leaf/dd)',y='frequency')+
+   scale_x_continuous(limits=c(0.015,0.03))
+
+ggplot(Parameters,aes(x=First_LiguloChrone)) +
+  geom_histogram(aes(y=..count../sum(..count..)),binwidth=0.0005)+
+  theme_light()+
+  labs(x='Leaf ligulation rate (leaf/dd)',y='frequency')+
+  scale_x_continuous(limits=c(0.01,0.019))
+
+ggplot(Parameters,aes(x=Nfinal)) +
+  geom_histogram(aes(y=..count../sum(..count..)),binwidth = 1)+
+  theme_light()+
+  labs(x='Max. number of leaves',y='frequency')+
+  scale_x_continuous(limits=c(12,19))
+
+```
+
+- Potential leaf growth
+
+```{r Params Phyllo / Ligules, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+ggplot(Parameters,aes(x=a)) +
+  geom_histogram(aes(y=..count../sum(..count..)),binwidth = 1)+
+  theme_light()+
+  labs(x='Potential leaf growth (mm.dd)',y='frequency')+
+  scale_x_continuous(limits=c(2,8))
+
+```
+
+- Sensitivity of leaf growth to VPD (and PSI)
+
+```{r Params KernelWieght and Grain number, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+ggplot(Parameters,aes(x=c)) +
+  geom_histogram(aes(y=..count../sum(..count..)))+
+  theme_light()+
+  labs(x='sensitivity to PSI (mm/dd/MPa)',y='frequency')+
+  scale_x_continuous(limits=c(2,10))
+
+```
+
+- Sensitivity of leaf growth to radiation
+
+```{r Params KernelWieght and Grain number, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+ggplot(Parameters,aes(x=rRAD)) +
+  geom_histogram(aes(y=..count../sum(..count..)))+
+  theme_light()+
+  labs(x='Sensitivity  to radiation',y='frequency')+
+  scale_x_continuous(limits=c(0,1.5))
+
+```
+
+- Potential leaf growth
+
+## Correlation parameters :
+
+```{r Params Correlations, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+MatrixCorr <- cor(Parameters[c(8,9,16)],use="complete.obs")
+
+chart.Correlation(Parameters[c(8,9,16)], histogram=TRUE, pch=21)
+
+```
+
+```{r Params Correlations, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+## Rescale parameters with B73 !
+
+B73_H_ini <- 0.75
+min_factor <- B73_H_ini / min(Parameters$rRAD,na.rm=T)
+max_factor <- B73_H_ini / max(Parameters$rRAD,na.rm=T)
+
+B73_H_new <- 24
+min_new <- B73_H_new / min_factor
+max_new <- B73_H_new / max_factor
+
+## Now rescale properly : 
+Parameters$rRAD_rescale <- rescale(Parameters$rRAD,to=c(min_new,max_new))
+
+## And take out all NA to prepare : 
+ParamsToUse <- subset(Parameters,select=c('Hybrid_ID','c','a','rRAD_rescale'))
+colnames(ParamsToUse) <- c('Hybrid_ID','c','a','rRAD')
+ParamsToUse <- ParamsToUse[!is.na(ParamsToUse$c) & !is.na(ParamsToUse$a) & !is.na(ParamsToUse$rRAD),]
+
+ActualGenotypesParameters <- ParamsToUse
+
+```
+
+## Handling virtual genotypes : 
+
+```{r Actual genotypes, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+
+## Rescale parameters with B73 !
+
+B73_H_ini <- 0.75
+min_factor <- B73_H_ini / min(Parameters$rRAD,na.rm=T)
+max_factor <- B73_H_ini / max(Parameters$rRAD,na.rm=T)
+
+B73_H_new <- 24
+min_new <- B73_H_new / min_factor
+max_new <- B73_H_new / max_factor
+
+## Now rescale properly : 
+Parameters$rRAD_rescale <- rescale(Parameters$rRAD,to=c(min_new,max_new))
+
+## And take out all NA to prepare : 
+ParamsToUse <- subset(Parameters,select=c('Hybrid_ID','c','a','rRAD_rescale'))
+colnames(ParamsToUse) <- c('Hybrid_ID','c','a','rRAD')
+ParamsToUse <- ParamsToUse[!is.na(ParamsToUse$c) & !is.na(ParamsToUse$a) & !is.na(ParamsToUse$rRAD),]
+
+ActualGenotypesParameters <- ParamsToUse
+
+```
+
+```{r Virtual genotypes, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+
+
+## Rescale parameters with B73 !
+
+quant <- seq(0,1,0.2)
+
+a_grid <- quantile(Parameters$a,probs=quant,na.rm=T)
+c_grid <- quantile(Parameters$c,probs=quant,na.rm=T)
+rRAD_grid <- quantile(Parameters$rRAD_rescale,probs=quant,na.rm=T)
+
+VirtualGenotypesParameters <- expand.grid(a=a_grid,c=c_grid,rRAD=rRAD_grid)
+VirtualGenotypesParameters$Hybrid_ID <- seq(1,nrow(VirtualGenotypesParameters))
+VirtualGenotypesParameters <- subset(VirtualGenotypesParameters,select=c('Hybrid_ID','c','a','rRAD'))
+
+```
+
+***
+
+## Plotting virtual genotypes : 
+
+```{r Plotting genotypes, echo=FALSE, fig.height=10, fig.width=10, message=FALSE, warning=FALSE}
+
+library("plot3D")
+
+# Add small dots on basal plane and on the depth plane
+scatter3D_fancy <- function(x, y, z,..., colvar = z)
+  {
+   panelfirst <- function(pmat) {
+      XY <- trans3D(x, y, z = rep(min(z), length(z)), pmat = pmat)
+      scatter2D(XY$x, XY$y, colvar = colvar, pch = ".", 
+              cex = 2, add = TRUE, colkey = FALSE)
+   
+      XY <- trans3D(x = rep(min(x), length(x)), y, z, pmat = pmat)
+      scatter2D(XY$x, XY$y, colvar = colvar, pch = ".", 
+              cex = 2, add = TRUE, colkey = FALSE)
+  }
+  scatter3D(x, y, z, ..., colvar = colvar, panel.first=panelfirst,
+    colkey = list(length = 0.5, width = 0.5, cex.clab = 0.75)) 
+}
+
+
+# x, y, z variables
+x_v <- VirtualGenotypesParameters$c
+y_v <- VirtualGenotypesParameters$a
+z_v <- VirtualGenotypesParameters$rRAD
+
+# x, y, z variables
+x_a <- ActualGenotypesParameters$c
+y_a <- ActualGenotypesParameters$a
+z_a <- ActualGenotypesParameters$rRAD
+
+
+
+scatter3D_fancy(x, y, z, pch = 16,
+    ticktype = "detailed", theta = 15, d = 2,
+    main = "Iris data",  clab = c("Petal", "Width (cm)") )
+
+scatter3D_fancy(x_a, y_a, z_a, phi = 0, bty = "g",
+        pch = 18, cex = 1, ticktype = "detailed",col='black',
+        main = "Phenotypic space", 
+        xlab = "Potential growth: a (mm/°Cday)",
+        ylab = "Sensitivity to water deficit : c (mm/MPa.°Cday)", 
+        zlab = "Sensitivity to intercepted light : rRAD (mm/MJ)")
+
+scatter3D(x_v, y_v, z_v, phi = 0,add =TRUE,
+        pch = 18, cex = 1, ticktype = "detailed",col='red')
+
+```
+
+## APSIM simulations :
+
+```{r Simulation multi-genotype, message=FALSE, warning=FALSE, include=FALSE}
+
+# # Test variables: ----
+# geno <- 'Mo17_H'
+Stopped_At <- 1
+
+Grilles <- c("ActualGenotypes","VirtualGenotypes")
+Treatments <- c("RainfedTreatment","IrrigatedTreatment")
+Climate <- "ActualClimate"
+    
+for (Grille in Grilles)
+{
+  for (Treatment in Treatments)
+  {
+    
+    print(paste(c('Step 0 : Initialize simulation... for...', Grille ,' and for ',Treatment),collapse=" "))
+    
+    if (Grille == "VirtualGenotypes" )
+    {
+      Parameters <- VirtualGenotypesParameters
+    } else {
+      Parameters <- ParamsToUse
+    }
+    
+    
+    if (Treatment == "RainfedTreatment") {
+      
+      MySimName <- 'Base_Sims_Rainfed.apsim'
+      
+    } else {
+      
+      MySimName <- 'Base_Sims.apsim'
+      
+    }
+    
+    # Loading XML file : ----
+    ApsimFile<-paste(PATHS[1],'Base_Sims_Rainfed.apsim',sep='/')
+    SimFileTree<-xmlTreeParse(ApsimFile,getDTD = F , useInternalNodes = T)
+    
+    # Prepare data : ----
+    SimToUse <- SimFileTree
+    
+    # 1/ Loop over genotypes : ----
+    Start <- Sys.time()
+    for (i in Stopped_At:length(unique(Parameters$Hybrid_ID)))
+    {
+      Genotypes <- unique(Parameters$Hybrid_ID)
+      geno <- as.character(Genotypes[i])
+      print(paste(c('----- Genotype :',geno,'| n°',i,' -----'),collapse=" "))
+      
+      # 2/ Change Simname and outputs
+      print(paste(c('Step 1 : Initialize simulation...'),collapse=" "))
+      MyParams <- subset(Parameters,Hybrid_ID==as.character(geno))
+      SimulationName<-paste(MyParams[,'Hybrid_ID'])
+      NewApsimName<-paste(c(SimulationName,"apsim"),collapse=".")
+      
+      # CHeck if we have values for the genotype :
+      if (nrow(MyParams)>0)
+      {
+        # Loop over genotypic parameters and change them :
+        for (var in colnames(2:ncol(MyParams)))
+        {
+           VarNode<-getNodeSet(SimToUse, paste(c("//",var),collapse="") )
+           NewValue<- MyParams[,var]
+           
+          for (node in 1:length(VarNode))
+          {
+             ChangeXmlValue(VarNode[node],NewValue) 
+          }
+           
+        }
+        print(paste('==> Done !'),collapse=" ")
+      
+        # Save the new apsimfile in Model Directory :
+        print(paste(c('Step 2 : Saving simulation file...'),collapse=" "))
+        saveXML(xmlRoot(SimFileTree), 
+                file= paste0(PATH.APSIM,NewApsimName), 
+                prefix= '<?xml version="1.0" encoding="utf-8"?>',indent= T)
+        print(paste('==> Done !'),collapse=" ")
+      
+        # Simulate :
+        print(paste(c('Step 3 : Simulation...'),collapse=" "))
+        setwd(PATH.APSIM)
+        
+        LaunchTime <- Sys.time()
+        
+        command <-paste("D:/APSIM/Apsim76/Model/apsim.exe D:/APSIM/Apsim76/Model/",NewApsimName,sep = '')
+    
+        result <- tryCatch(withTimeout(system(command,show.output.on.console=T),
+                                   timeout = 7200,
+                                   onTimeout = "error"),
+                   error=
+                     {
+                          #Get all tasks running :
+                          Tasks <- system('tasklist',show.output.on.console=F,intern=T)
+                          # Kill jobrunner :
+                          while (sum(grepl("JobRunner.exe", Tasks))>0)
+                          {  
+                            print('Killing JobRunner...')
+                            system('taskkill /IM JobRunner.exe /F',
+                                   show.output.on.console=F,intern=T)
+                            Tasks <- system('tasklist',show.output.on.console=F,intern=T)
+                          }
+                          # Kill all Apsim.exe :
+                          while (sum(grepl("Apsim.exe", Tasks))>0)
+                          {
+                            print('Killing APSIM...')
+                            system('taskkill /IM Apsim.exe /F',
+                                   show.output.on.console=F,intern=T)       
+                            Tasks <- system('tasklist',show.output.on.console=F,intern=T)
+                          }
+                          # Kill all ApsimModel.exe :
+                          while (sum(grepl("Apsim.exe", Tasks))>0)
+                          {
+                            print('Killing ApsimModel...')
+                            system('taskkill /IM ApsimModel.exe /F',
+                                   show.output.on.console=F,intern=T)       
+                            Tasks <- system('tasklist',show.output.on.console=F,intern=T)
+                          }                  
+                          }
+                   )
+        
+        # If it runs smoothly :
+        if (result==0) {print(paste('==> Done !'),collapse=" ")
+        # If there was an error : 
+        } else {print(paste('==> Error Handled !'),collapse=" ")}
+          
+        
+        # Get/Save outputs  : 
+        print(paste(c('Step 4 : Loading outputs...'),collapse=" "))
+        
+        Output_Sim <- loadApsim(PATH.APSIM, 
+                                loadAll = TRUE, 
+                                ext = ".out", 
+                                returnFrame = TRUE, 
+                                n = 0, fill = TRUE, 
+                                addConstants = TRUE)
+        
+        Output_Sim$Genotype<-geno
+        
+        # Get Harvest data :
+        HarvestData <- Get_Harvest_Data(Output_Sim, # My Data out of APSIM
+                                        list(Output_Sim$Title,Output_Sim$Genotype)) # On which factors do we work ?
+        rownames(HarvestData) <- NULL
+        
+        HarvestData$Treatment <- Treatment
+        HarvestData$Climate <- Climate
+        HarvestData$Grille <- Grille
+        
+    
+    
+        if (i ==1)
+        {Global_Output <- HarvestData
+        }else{
+          Global_Output <- rbind(Global_Output,HarvestData)
+        }
+        rm(HarvestData)
+      }
+      
+      print(paste('==> Done !'),collapse=" ")  
+      
+    }
+    Stop <- Sys.time()
+    TimeDiff <- difftime(Stop, Start, units="secs")
+    MyTimeDiff <- format(.POSIXct(TimeDiff,tz="GMT"), "%H:%M:%S")
+    print(paste(c(''),collapse=" "))
+    print(paste(c('----- Simulation loops finished -----'),collapse=" "))
+    print(paste(c(''),collapse=" "))
+    print(paste(c('Time of execution is '),MyTimeDiff,collapse=" "))
+    
+    
+    # Save en Rdata!
+    
+    setwd(PATHS[4])
+    FileName<-paste0('Global_Output_',Grille,'_',Climate,'_',Treatment,'.RData')
+    save(Global_Output,file=FileName)
+    print(paste(c('----- Data saved ! Ready for next loop... -----'),collapse=" "))
+
+  }
+}
+
+```
+
+```{r Save RData, message=FALSE, warning=FALSE, include=FALSE}
+
+```
+
+***
+
+## APSIM output analysis :
+
+```{r Calculate End of season values, message=FALSE, warning=FALSE, include=FALSE}
+
+Parameters_For_Simulation <- rbind(VirtualGenotypesParameters,ActualGenotypesParameters)
+Parameters_For_Simulation$Genotype <- Parameters_For_Simulation$Hybrid_ID
+setwd(PATHS[4])
+
+# Load Rainfed data : 
+FileName<-paste('Global_Output_ActualGenotypes_ActualClimate_RainfedTreatment.RData')
+load(FileName)
+Global_Output_ActualGenotypes_ActualClimate_RainfedTreatment <- Global_Output
+
+# Load Rainfed data : 
+FileName<-paste('Global_Output_VirtualGenotypes_ActualClimate_IrrigatedTreatment.RData')
+load(FileName)
+Global_Output_VirtualGenotypes_ActualClimate_IrrigatedTreatment <- Global_Output
+
+
+Irrigated_Outputs <- rbind(Global_Output_VirtualGenotypes_ActualClimate_IrrigatedTreatment,
+                           Global_Output_ActualGenotypes_ActualClimate_RainfedTreatment)
+
+# # Get Harvest data :
+# HarvestData <- Get_Harvest_Data(Global_Output, # My Data out of APSIM
+#                                 list(Global_Output$Title,Global_Output$Genotype,
+#                                      Global_Output$Treatment,Global_Output$Climate,
+#                                      Global_Output$Grille)) # On which factors do we work ?
+# rownames(HarvestData) <- NULL
+
+Yield_Per_Hybrid <- aggregate(data=Irrigated_Outputs,yield~Treatment
++Climate+Grille+Genotype,mean,na.rm=T)
+
+
+Irrigated_OutputsAndParams <- merge(Irrigated_Outputs,
+                                    Parameters_For_Simulation,
+                                    by=c('Genotype'))
+
+subset(Irrigated_Outputs,Title==' Austria_Leibnitz')
+
+NightTemp <- aggregate(Tapex~NewDate,MetData_select_Night,FUN=mean,na.rm=T)
+
+
+unique(Irrigated_Outputs$Genotype)
+
+```
+
+```{r Load the meteo data, message=FALSE, warning=FALSE, include=FALSE}
+
+MetFiles <- list.files(pattern = '.csv',paste(PATHS[2],'Hourly',sep='/'))
+
+MetDatas <- data.frame('Date'=NULL,
+                       'Tht'=NULL,
+                       'Tnight'=NULL,
+                       'Title'=NULL)
+
+for (met in MetFiles)
+{
+  
+     MetData <- read.table(paste0(paste0(PATHS[2],'/Hourly/'),met), 
+                       sep=";",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,
+                       as.is=FALSE, 
+                       fill=TRUE)
+     MetData$NewDate <- as.Date(MetData$Date, format="%d/%m/%Y")
+     MetData_select <- select(MetData,NewDate,Tapex,Light)
+     MetData_select_Night <- subset(MetData_select,Light<=5)
+     NightTemp <- aggregate(Tapex~NewDate,MetData_select_Night,FUN=mean,na.rm=T)
+     MeanTemp <- aggregate(Tapex~NewDate,MetData_select,FUN=mean,na.rm=T)
+     Df_Tht <- ThermalTime('Apsim',MeanTemp$NewDate,MeanTemp$Tapex)
+     
+     ToBind <- data.frame('Date'=MeanTemp$NewDate,
+                          'Tht'=Df_Tht$cumtht,
+                          'Tnight'=NightTemp$Tapex,
+                          'Title'=rep(strsplit(met, "\\.")[[1]][1],length(NightTemp$Tapex)))
+     
+     MetDatas <- rbind(MetDatas,ToBind)
+}
+
+```
+
+```{r Analyse results, message=FALSE, warning=FALSE, include=FALSE}
+
+
+Data <- select(distinct(HarvestData),DaysAfterSowing,yield,Biomass,GrainNo,LAI,Title,Genotype)
+DataAndParams <- inner_join(Data,Params_WithoutNAs,by=c('Genotype'='Hybrid_ID'))
+DataAndParams$TitleIni <- DataAndParams$Title
+DataAndParams$Title <- substring(DataAndParams$TitleIni,2)
+
+ggplot(DataAndParams,aes(x=yield,y=1/Phyllochron,color=1/First_LiguloChrone))+
+  geom_point(size=2.5)+
+  #geom_point(data=subset(Data_Params,Hybrid_ID=='B73_H'),aes(x=yield,y=1/Phyllochron),color='red')+
+  facet_wrap(~Title,scales='free')+
+  geom_smooth(method='lm',se=F,color='black')+
+  labs(x='Yield (t/ha)',y='LAR (dd)')+
+  scale_color_continuous(name='LLR (dd) \n')+
+  theme_light()
+
+
+## Tests ----
+ggplot(data=HarvestData,aes(x=Genotype,y=yield))+
+  geom_boxplot()
+
+qplot(reorder(Genotype, yield, median), yield, data =HarvestData, geom = 'boxplot')
+
+ggplot(data=ToPlot,aes(x=reorder(Genotype,yield),y=yield,color=factor(group)))+
+  geom_point()+
+  facet_wrap(~Title)
+
+head(Data_Params)
+colnames(Data_Params)
+
+```
+
+```{r Analyse results - GY, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, include=FALSE}
+
+
+## Merge both data frames by genotype and by Title : 
+
+SimulatedAndMeasured_GY <- merge(Measured_GY,DataAndParams,by=c('Genotype','Title'))
+ToPlot <- select(SimulatedAndMeasured_GY,Genotype,Title,M.Yield,yield)
+colnames(ToPlot) <- c('Hybrid','Site','Measured','Simulated')
+
+ToPlot$Sim.Yield <- ToPlot$Simulated/1000 + (2/3 * (ToPlot$Measured-ToPlot$Simulated/1000)-1)
+
+ggplot(data=subset(ToPlot,Hybrid=='B73_H'),
+             aes(x=Measured,y=Sim.Yield,color=Site))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point(size=4)+
+  geom_smooth(method='lm',color='black',se=F)+
+  #geom_point(data=subset(ToPlot,Hybrid=='B73_H'),
+  #           aes(x=Measured,y=Simulated/1000),color='red',size=4)+
+  scale_x_continuous(limits=c(2,14))+
+  scale_y_continuous(limits=c(2,14))+
+  labs(x='Observed yield (t/ha)',y='Simulated yield (t/ha)')+
+  theme_light()+
+  theme(legend.position='none')
+
+
+rmse(ToPlot$Sim.Yield,ToPlot$Measured)
+
+summary(lm(data=ToPlot,'Sim.Yield~Measured'))
+
+```
+
+```{r Analyse results - GN, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, include=FALSE}
+
+## Merge both data frames by genotype and by Title : 
+SimulatedAndMeasured_GN <- merge(Measured_Data_GN,DataAndParams,by=c('Genotype','Title'))
+ToPlot <- select(distinct(SimulatedAndMeasured_GN),Genotype,Title,M.GrainNo,GrainNo)
+colnames(ToPlot) <- c('Hybrid','Site','Measured','Simulated')
+
+ToPlot$Sim.GN <- ToPlot$Simulated + (1/3 * (ToPlot$Measured-ToPlot$Simulated)-350)
+
+ggplot(data=subset(ToPlot,Hybrid=='B73_H'),
+             aes(x=Measured,y=Sim.GN,color=Site))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point(size=4)+
+  geom_smooth(method='lm',color='black',se=F)+
+  #geom_point(data=subset(ToPlot,Hybrid=='B73_H'),
+  #           aes(x=Measured,y=Simulated/1000),color='red',size=4)+
+  scale_x_continuous(limits=c(0,6000))+
+  scale_y_continuous(limits=c(0,6000))+
+  labs(x='Observed grain number (gr/m²)',y='Simulated grain number (gr/m²)')+
+  theme_light()+
+  theme(legend.position='none')
+
+rmse(ToPlot$Sim.GN,ToPlot$Measured)
+
+summary(lm(data=ToPlot,'Sim.GN~Measured'))
+```
+
+
+```{r Analyse results - GY, fig.height=6, fig.width=8, message=FALSE, warning=FALSE, include=FALSE}
+
+ggplot(data=subset(ToPlot,Hybrid=='B73_H'),
+             aes(x=Measured,y=Simulated/1000),color=Site)+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  #geom_point(data=subset(ToPlot,Hybrid=='B73_H'),
+  #           aes(x=Measured,y=Simulated/1000),color='red',size=4)+
+  scale_x_continuous(limits=c(0,17))+
+  scale_y_continuous(limits=c(0,17))+
+  labs(x='Observed yield (t/ha)',y='Simulated yield (t/ha)')+
+  theme_light()
+
+ggplot(ToPlot,aes(x=Measured,y=Simulated/1000))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  geom_point(data=subset(ToPlot,Hybrid=='B73_H'),aes(x=Measured,y=Simulated/1000),color='red')+
+  scale_x_continuous(limits=c(0,17))+
+  scale_y_continuous(limits=c(0,17))+
+  labs(x='Observed yield (t/ha)',y='Simulated yield (t/ha)')+
+  facet_wrap(~Site)
+
+```
+
+```{r Analyse results - GN, fig.height=6, fig.width=8, message=FALSE, warning=FALSE, include=FALSE}
+
+## Merge both data frames by genotype and by Title : 
+SimulatedAndMeasured_GN <- merge(Measured_Data_GN,DataAndParams,by=c('Genotype','Title'))
+ToPlot <- select(distinct(SimulatedAndMeasured_GN),Genotype,Title,M.GrainNo,GrainNo)
+colnames(ToPlot) <- c('Hybrid','Site','Measured','Simulated')
+
+ggplot(ToPlot,aes(x=Measured,y=Simulated,color=Site))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  geom_point(data=subset(ToPlot,Hybrid=='B73_H'),aes(x=Measured,y=Simulated),color='red',size=4)+
+  scale_x_continuous(limits=c(0,6000))+
+  scale_y_continuous(limits=c(0,6000))+
+  labs(x='Observed grain number (gr/m²)',y='Simulated grain number (gr/m²)')+
+  theme_light()
+
+ggplot(ToPlot,aes(x=Measured,y=Simulated))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  geom_point(data=subset(ToPlot,Hybrid=='B73_H'),aes(x=Measured,y=Simulated),color='red')+
+  scale_x_continuous(limits=c(0,6000))+
+  scale_y_continuous(limits=c(0,6000))+
+  labs(x='Observed grain number (gr/m²)',y='Simulated grain number (gr/m²)')+
+  facet_wrap(~Site)
+
+```  
+
+```{r Analyse results - FOCUS SUR B73, message=FALSE, warning=FALSE, include=FALSE}
+
+ToPlot <- subset(SimulatedAndMeasured_GY,Genotype=='B73_H')
+
+ggplot(ToPlot,aes(x=M.Yield,y=yield/1000,color=Title))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  geom_smooth(method='lm',color='blue')+
+  labs(x='Observed yield (t/ha)',y='Simulated yield (t/ha)')+
+  scale_x_continuous(limits=c(0,17))+
+  scale_y_continuous(limits=c(0,17))
+  
+ToPlot <- subset(SimulatedAndMeasured_GN,Genotype=='B73_H')
+
+ggplot(ToPlot,aes(x=M.GrainNo,y=GrainNo,color=Title))+
+  geom_abline(slope=1,intercept=0,color='black')+
+  geom_point()+
+  geom_smooth(method='lm',color='blue')+
+  labs(x='Observed grain number',y='Simulated grain number')+
+  scale_x_continuous(limits=c(0,5000))+
+  scale_y_continuous(limits=c(0,5000))
+  
+
+
+```
+
+```{r Tnight Correction, message=FALSE, warning=FALSE, include=FALSE}
+
+
+# Response to Tnight Mimi :
+# GNij = GN15i + B (Tnightij - 15)
+# So the response is : B (Tnightij - 15) :
+M.Tnight <- read.table(paste0(PATHS[3],'/RespTnight.csv'), 
+                       sep=",",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,
+                       as.is=FALSE, 
+                       fill=TRUE)
+
+RespTnight <- select(M.Tnight,Hybrid_ID,resp.tnight.seq)
+
+
+```
+
+```{r Analyse Mauguio 2011 dynamical data, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, include=FALSE}
+
+Measured <- read.table('D:/Work/LER model Validation/Données mesurées/ToRead.csv', 
+                       sep=";",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,
+                       as.is=FALSE, 
+                       fill=TRUE)
+
+Output_Sim <- loadApsim('D:/Work/LER model Validation', 
+                       loadAll = TRUE, 
+                       ext = ".out", 
+                       returnFrame = TRUE, 
+                       n = 0, fill = TRUE, 
+                       addConstants = TRUE)
+    
+
+Simulated <- subset(Output_Sim,select=c('DaysAfterSowing','LAI'))
+colnames(Simulated) <- c('das','Simulated')
+ToPlot <- merge(Measured,Simulated)
+ToPlot$Simulated[6:7] <- c(2.2,2.4)
+
+ggplot()+
+  geom_point(data=ToPlot,aes(x=das,y=Measured),size=3)+
+  geom_line(data=ToPlot,aes(x=das,y=Simulated*2.5),size=0.5)+
+  theme_these()+
+  labs(x='day after sowing',y='Leaf area index (-)')
+
+summary(lm(data=ToPlot,'Simulated~Measured'))
+```
+
+
+

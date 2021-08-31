@@ -1,0 +1,1164 @@
+---
+title: "Retrieve_Outputs_Sim"
+author: "Seb L."
+date: "14 mars 2017"
+output: html_document
+---
+
+```{r Sources}
+
+library(tidyr)
+library(dplyr)
+library(Hmisc)
+library(scales)
+library(ggcorrplot)
+library(RSelenium)
+library(zoo)
+library(maptools)
+library(rworldmap)
+library(ggplot2)
+library(RColorBrewer)
+library(akima)
+library(ggmap)
+library(rgdal)
+library(fields)
+library(ggthemes)
+library(ggThemeAssist)
+library(raster)
+library(dismo)
+
+```
+
+```{r PATHS}
+
+PATH_Outputs <- 'F:/Sebastien/4- Outputs'
+
+```
+
+```{r FUNCTION }
+
+
+## Getting all data for harvest dates only :
+Get_Harvest_Data <- function(Output_Sim,By)
+{
+  HarvestDateSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           Temp<-subset(x, day==max(x$day))
+                           return(Temp)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(HarvestDateSim)
+}
+
+GetDataframeToSave <- function(RData,By,Colnames,Scenario) 
+{
+  
+  load(RData)
+  HarvestData <- Get_Harvest_Data(Global_Output,By)
+  rm(Global_Output)
+  HarvestData_Sub <- subset(HarvestData,select=Colnames)
+  rm(HarvestData)
+  HarvestData_Sub$Scenario <- Scenario
+  return(HarvestData_Sub)
+}
+
+## Getting all data for July only :
+Get_July_Data <- function(Output_Sim,By,mon)
+{
+  JulyDataSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           # Get the data we need :
+                           Temp <- subset(x,month==mon)
+                           Temp$MoyT<-(Temp$MaxT+Temp$MinT)/2
+                           ToMean <- select(Temp,MaxT,MinT,MoyT,Radn,waterSD,radn_int)                           
+                           # Aggregate data :
+                           MeanDf <- data.frame(Title=Temp$Title[1],
+                                                year=Temp$year[1],
+                                                Clim=Temp$Clim[1],
+                                                GCM=Temp$GCM[1],
+                                                Tmax=mean(ToMean$MaxT,na.rm=T),
+                                                Tmin=mean(ToMean$MinT,na.rm=T),
+                                                Tmoy=mean(ToMean$MoyT,na.rm=T),
+                                                Radn=mean(ToMean$Radn,na.rm=T),
+                                                Radint=mean(ToMean$radn_int,na.rm=T),
+                                                SD=mean(ToMean$waterSD,na.rm=T))
+                           return(MeanDf)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(JulyDataSim)
+}
+
+## Getting all Boris variables :
+GetVariablesFromDaily <- function(MyGenotypes,scenario,gcm,climat,root)
+{
+
+CollectGarbage <- gc()
+ToSearch <- subset(MyGenotypes,Scenario==scenario & Clim==climat)
+setwd(paste(root,climat,scenario,sep='/'))
+
+load(paste(climat,scenario,gcm,'Global_Output.RData',sep='_'))
+Global_Output$Scenario <- scenario
+Global_Output$GCM <- gcm
+ToSearch$GCM <- gcm
+DailyOptimum <- merge(ToSearch,Global_Output,
+                           by=c('Title','Scenario','Clim','GCM','Genotype'),
+                           all.x=T,all.y=F)
+DailyOptimum_Ordered <-Global_Output
+rm(Global_Output)
+DailyOptimum_Ordered <- DailyOptimum[with(DailyOptimum,
+                                    order(Title,Scenario,GCM,Clim,-year,DaysAfterSowing)),]
+
+# Calculate each variable :
+SowDate <- aggregate(day~Title+Scenario+GCM+Clim+year,subset(DailyOptimum_Ordered,stagename=='sowing'),FUN = min,na.rm=T)
+colnames(SowDate) <- c('Title','Scenario','GCM','Clim','year','SowDate')
+
+FloweringDate <- aggregate(day~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = min,na.rm=T)
+colnames(FloweringDate) <- c('Title','Scenario','GCM','Clim','year','FloweringDate')
+
+HarvestDate <- aggregate(day~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = max,na.rm=T)
+colnames(HarvestDate) <- c('Title','Scenario','GCM','Clim','year','HarvestDate')
+
+Data <- merge(SowDate,FloweringDate,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+Data2 <- merge(Data,HarvestDate,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+ThtFlo <- aggregate(TT~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = min,na.rm=T)
+Data3 <- merge(Data2,ThtFlo,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+Yield <- aggregate(yield~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = max,na.rm=T)
+Data4 <- merge(Data3,Yield,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+WaterSDJuly <- aggregate(waterSD~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = mean,na.rm=T)
+Data5 <- merge(Data4,WaterSDJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+TmaxJuly <- aggregate(MaxT~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = max,na.rm=T)
+Data6 <- merge(Data5,TmaxJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+IncidentLightJuly <- aggregate(Radn~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,month==7),FUN = mean,na.rm=T)
+Data7 <- merge(Data6,IncidentLightJuly,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+InterceptedLightFlo <- aggregate(radn_int~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = mean,na.rm=T)
+
+Data8 <- merge(Data7,InterceptedLightFlo,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+
+SumInterceptedLight <- aggregate(radn_int~Title+Scenario+GCM+Clim+year,DailyOptimum_Ordered,FUN = sum,na.rm=T)
+colnames(SumInterceptedLight) <- c('Title','Scenario','GCM','Clim','year','sum_radn_int')
+
+Data9 <- merge(Data8,SumInterceptedLight,by=c('Title','Scenario','GCM','Clim','year'),all.x=T,all.y=F)
+
+
+MyDataToSave_Final <- Data9
+
+return(MyDataToSave_Final)
+
+}
+
+theme_map <- function(base_size = 9, base_family = "") {
+    theme_bw(base_size = base_size, base_family = base_family) %+replace%
+      theme(axis.line = element_blank(),
+            axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_blank(),
+            panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            panel.margin = unit(0, "lines"),
+            plot.background = element_blank(),
+            legend.position = "bottom",
+            legend.title=element_text(),
+            legend.direction="horizontal",
+            legend.text=element_text(size=6),
+            legend.box='horizontal')
+  }
+  
+```
+
+# 1 / Actual climate :
+
+```{r Load data - Actual}
+
+
+setwd('F:/Sebastien/Sims DROPS GxE/4.Out/ClimA/Irr')
+load('Global_Output_Grille.RData')
+
+Merged_Outputs <- subset(Global_Output_Grille,select=c('Date','year','TT',
+                                                     'Title','Genotype',
+                                                     'biomass','yield',
+                                                     'lai','GrainNo', 'GrainSize'))
+colnames(Site_coord) <- c('Lon','Lat','Title','City','Country')
+
+rm(Global_Output_Grille)
+  
+Merged_Outputs_Irr <- merge(Merged_Outputs,Site_coord,by='Title')
+Merged_Outputs_Irr$Scenario <- 'Irr'
+
+setwd('F:/Sebastien/Sims DROPS GxE/4.Out/ClimA/Rainfed')
+load('Global_Output_Grille.RData')
+
+Merged_Outputs <- subset(Global_Output_Grille,select=c('Date','year','TT',
+                                                     'Title','Genotype',
+                                                     'biomass','yield',
+                                                     'lai','GrainNo', 'GrainSize'))
+colnames(Site_coord) <- c('Lon','Lat','Title','City','Country')
+
+rm(Global_Output_Grille)
+  
+Merged_Outputs_Rainfed <- merge(Merged_Outputs,Site_coord,by='Title')
+Merged_Outputs_Rainfed$Scenario <- 'Rainfed'
+
+
+setwd('F:/Sebastien/Sims DROPS GxE/4.Out/ClimA/Well_Watered')
+load('Global_Output_Grille.RData')
+
+Merged_Outputs <- subset(Global_Output_Grille,select=c('Date','year','TT',
+                                                     'Title','Genotype',
+                                                     'biomass','yield',
+                                                     'lai','GrainNo', 'GrainSize'))
+colnames(Site_coord) <- c('Lon','Lat','Title','City','Country')
+
+rm(Global_Output_Grille)
+  
+Merged_Outputs_Well_Watered <- merge(Merged_Outputs,Site_coord,by='Title')
+Merged_Outputs_Well_Watered$Scenario <- 'Well_Watered'
+
+```
+
+
+```{r - Location Map, echo=FALSE, fig.height=3, fig.width=3, warning=FALSE}
+
+###Chargement de la carte du monde (fortity --> permet d'utiliser ggplot)
+WorldMap <- getMap(resolution = "low")
+WorldMap2 <- fortify(WorldMap)
+  
+##Relief
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+Alt<-getData("worldclim",var="alt",res=10)
+ALT<-as.data.frame(Alt,xy=TRUE,na.rm=TRUE)
+names(ALT)<-c('long','lat','alt')
+test<-subset(ALT,long>=min(Site_coord$Lon)-1 & long<=max(Site_coord$Lon)+1 
+             & lat>=min(Site_coord$Lat)-1 & lat <=max(Site_coord$Lat)+1)
+ALTITUDE<-subset(test,alt>850)
+names(ALTITUDE)<-c('LON','LAT','ALT')
+  
+####Selection des pays non ?tudi?s sur la carte d'Europe
+England<-subset(WorldMap2,id=="United Kingdom")
+  
+###Couche Oc?an
+setwd('D:/Work/Sims  - DROPS GxE/3.Data/ne_50m_ocean')
+Ocean<-readShapePoly("ne_50m_ocean.shp")
+Ocean2<-fortify(Ocean)
+
+#####2. Sites MAP#####
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord_map<-read.table('sites_coord_carte.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord_map$site<-as.factor(Site_coord_map$site)
+
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+Site_coord$City <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][2]) 
+Site_coord$Country <-  sapply(c(1:nrow(Site_coord)), 
+                           function(x) strsplit(Site_coord$site[x],"[_]")[[1]][1]) 
+
+# Map with only points !#####
+ggplot(Site_coord,aes(Lon,Lat))+
+  geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+  geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+  geom_point(data=Site_coord, size=5)+
+  geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+  #geom_text_repel(data=Site_coord,aes(Lon, Lat, label = City)) +
+  theme_map()+
+  coord_quickmap(xlim = c(min(Site_coord$Lon-1),max(Site_coord$Lon+1)),
+                 ylim= c(min(Site_coord$Lat-1),max(Site_coord$Lat)+1), 
+                 expand=FALSE)
+
+
+
+
+##### Phyllo et Ligulo : 
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+ToPlot <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_APSIM_245_geno_phylo4M_liguldif_26.10.2017.csv',
+                     sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+
+
+theme_these <- 
+  function(base_size = 16, base_family = "") {
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(panel.background = element_blank(),
+          plot.background = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.position = "none",
+          legend.direction="horizontal",
+          legend.text=element_text(size=16),
+          plot.title = element_text(hjust = 0.5,margin = margin(b = + 10)),
+          strip.background = element_blank(),
+          strip.text.x = element_blank())
+  }
+
+ggplot()+
+  geom_abline(data=ToPlot,aes(slope=Phyllochron,
+                              intercept=Leaf_tip_emerg,
+                              color=Phyllochron))+
+  geom_abline(data=ToPlot,aes(slope=First_LiguloChrone,
+                              intercept=1-(tt_firstligule_sinceapp*First_LiguloChrone),
+                              color=First_LiguloChrone))+
+  scale_x_continuous(limits=c(0,1000),breaks=seq(0,1000,100))+
+  scale_y_continuous(limits=c(1,14),breaks=seq(0,14,2))+
+  theme(legend.position='none')+
+  theme_these()+
+  labs(x='Thermal time (°Cday)',y='Phenological stages (leaves)')
+
+
+
+#### 
+
+
+##### Phyllo et Ligulo : 
+setwd('D:/Work/Sims  - DROPS GxE/3.Data')
+ToPlot <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_DROPS_Panel_ForAPSIM.csv',
+                     sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+
+
+ggplot(data=ToPlot,aes(x=Phyllochron))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(0.016,0.028))+
+  theme_these()
+  
+
+ggplot(data=ToPlot,aes(x=First_LiguloChrone))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(0.01,0.02),breaks=seq(0.01,0.02,0.005))+
+  theme_these()
+
+
+ggplot(data=ToPlot,aes(x=Nfinal))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(13.5,17.5))+
+  theme_these()
+
+ggplot(data=ToPlot,aes(x=SensiRAD))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(0,1.3))+
+  theme_these()
+
+ToPlot <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_APSIM_245_geno_phylo4M_liguldif_26.10.2017.csv',
+                     sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+
+
+ggplot(data=ToPlot,aes(x=a))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(3,6.5))+
+  theme_these()
+
+
+ggplot(data=ToPlot,aes(x=b))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(-1.25,-0.5))+
+  theme_these()
+
+ggplot(data=ToPlot,aes(x=c))+
+  geom_histogram(fill='dodgerblue',alpha=0.8)+
+  scale_x_continuous(limits=c(3,10))+
+  theme_these()
+
+
+
+ToPlot <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_APSIM_245_geno_phylo4M_liguldif_26.10.2017.csv',
+                     sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+
+
+
+
+```
+
+
+```{r Load Parameters - Actual}
+
+## Load and treat parameters for simulation :
+Parameters <- read.table('F:/Sebastien/Sims DROPS GxE/3.Data/Parameters_DROPS_Panel_ForAPSIM.csv', 
+                         sep=",", header=TRUE,dec=".",row.names=NULL,as.is=FALSE, fill=TRUE)
+
+Parameters$respTnight <- -Parameters$Res.Tnight
+MyParams <- subset(Parameters,select=colnames(Parameters)[c(2,8,9,17,16)])
+
+ParamsB73 <- subset(MyParams,Hybrid_ID=='B73_H')
+Scale_a <- 3.5/ParamsB73$a
+Scale_c <- 3.5/ParamsB73$c
+MyParams$a <- MyParams$a*Scale_a
+MyParams$c <- MyParams$c*Scale_c
+MyParams$b <- (-0.0758*MyParams$c)-0.3672
+MyParams$c0 <- MyParams$a / MyParams$c
+
+## Build the vector of parameters : 
+Range_a <- quantile(MyParams$a , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+Range_c <- quantile(MyParams$c , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+Range_SensiRAD <- quantile(MyParams$SensiRAD , c(0.05,0.23,0.41,0.59,0.77,0.95)) 
+
+Parameters <- expand.grid(Range_a,Range_c,Range_SensiRAD)
+Parameters <- expand.grid(Range_a,Range_c,Range_SensiRAD)
+
+colnames(Parameters) <- c('a','c','SensiRAD')
+Parameters$Genotype <- seq(1,nrow(Parameters))
+Parameters$c0 <- Parameters$a / Parameters$c
+
+Parameters <- subset(Parameters,select = c('a','c0','SensiRAD','Genotype'))
+
+```
+
+
+```{r Treat data - Actual}
+
+PerSite_Data_ClimA_WW <- aggregate(cbind(yield,biomass,lai)~Genotype+Title,
+                                   Merged_Outputs_Well_Watered,FUN = mean,na.rm=T)
+PerSite_Data_ClimA_WW$Scenario <- 'Well_Watered'
+PerSite_Data_ClimA_WD <- aggregate(cbind(yield,biomass,lai)~Genotype+Title,
+                                   Merged_Outputs_Rainfed,FUN = mean,na.rm=T)
+PerSite_Data_ClimA_WD$Scenario <- 'Rainfed'
+PerSite_Data_ClimA_Irr <- aggregate(cbind(yield,biomass,lai)~Genotype+Title,
+                                   Merged_Outputs_Irr,FUN = mean,na.rm=T)
+PerSite_Data_ClimA_Irr$Scenario <- 'Irrigation'
+
+PerSite_Data_ClimA <- bind_rows(PerSite_Data_ClimA_WW,PerSite_Data_ClimA_WD,PerSite_Data_ClimA_Irr)
+
+OutputsAndParams <- merge(PerSite_Data_ClimA,Parameters)
+
+Aggr_OutputsAndParams <- aggregate(cbind(yield,biomass,lai)~Genotype+Scenario,
+                                   OutputsAndParams,FUN = mean,na.rm=T)
+
+Aggr_OutputsAndParams <- merge(Aggr_OutputsAndParams,Parameters)
+
+
+MyScenario <- subset(Aggr_OutputsAndParams,
+                     Scenario=='Rainfed' & a == unique(Aggr_OutputsAndParams$a)[4])
+
+
+ggplot(MyScenario, aes(c0, SensiRAD,fill=yield)) +
+    #facet_wrap(~a)+
+    geom_tile() + 
+    scale_fill_manual(values=c(7000,1000)) 
+
+Plots <- list()
+i <- 1
+for (Sce in unique(Aggr_OutputsAndParams$Scenario))
+{
+  # Map with only points !#####
+  Plots[[i]] <- 
+      ggplot(subset(Aggr_OutputsAndParams,
+                     Scenario==Sce & a == unique(Aggr_OutputsAndParams$a)[4])
+             , aes(c0, SensiRAD,fill=yield)) +
+          ggtitle(paste(Sce))+
+          #facet_wrap(~a)+
+          geom_tile()
+
+  i <- i+1
+}
+
+plot_grid(plotlist = Plots, labels = "AUTO", nrow = 3)
+
+
+
+##########
+
+
+
+Merged_Outputs <- bind_rows(Merged_Outputs_Irr,Merged_Outputs_Rainfed,Merged_Outputs_Well_Watered)
+Merged_Outputs <- Merged_Outputs_Well_Watered
+
+ggplot(data=Merged_Outputs,aes(y=yield,x=reorder(Country,yield,FUN=mean,na.rm=T),color=Scenario))+
+  geom_boxplot()+
+  labs(x=' ',y='Yield (t/ha)')
+
+colnames(MyParams) <- c("Genotype","a","c","SensiRAD")
+
+MeanPerSiteAndgenotype <- aggregate(yield~Genotype+Title,Merged_Outputs,FUN=mean,na.rm=T)
+
+BestGenotypePerSite <- aggregate(yield~Title,
+                                 MeanPerSiteAndgenotype,FUN=max,na.rm=T)
+
+BestGenotype <- merge(BestGenotypePerSite,MeanPerSiteAndgenotype)
+
+BestGenotypeWithParams <- merge(BestGenotype,MyParams,all.x=T,all.y=F,by='Genotype')
+
+BestGenotypeWithParams_AndCoord <- merge(BestGenotypeWithParams,Site_coord,all.x=T,all.y=F)
+
+```
+
+```{r Map best data - Actual}
+
+
+
+
+```
+
+##############################################################
+
+
+```{r Get Harvest data - Actual}
+
+
+## WW :
+scenario <-  'Well_Watered'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimA/Well_Watered')
+load('ClimA_Well_Watered_Density_Global_Output.RData')
+HarvestData_ClimA_WW <- Get_Harvest_Data(Global_Output,list(Global_Output$year,Global_Output$Title))
+HarvestData_ClimA_WW$Scenario <- scenario
+rm(Global_Output)
+
+## WD :
+scenario <-  'Rainfed'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimA/Rainfed')
+load('ClimA_Rainfed_Density_Global_Output.RData')
+HarvestData_ClimA_WD <- Get_Harvest_Data(Global_Output,
+                                         list(Global_Output$year,Global_Output$Title))
+HarvestData_ClimA_WD$Scenario <- scenario
+
+
+## Irr :
+scenario <-  'Irr'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimA/Irr')
+load('ClimA_Irr_Density_Global_Output.RData')
+HarvestData_ClimA_Irr <- Get_Harvest_Data(Global_Output,
+                                          list(Global_Output$year,Global_Output$Title))
+HarvestData_ClimA_Irr$Scenario <- scenario
+
+```
+
+```{r Save Harvest data - Actual}
+
+ClimA_Harvest_Density <- bind_rows(HarvestData_ClimA_WW,HarvestData_ClimA_WD,HarvestData_ClimA_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimA_Harvest_Density,file='ClimA_Harvest_Density.RData')
+rm(ClimA_Harvest_Density)
+
+
+```
+
+
+```{r Test}
+
+CollectGarbage <- gc()
+ToSearch <- subset(MyGenotypes,Scenario=='Well_Watered' & GCM=='NoG1' & Clim=='ClimA')
+setwd(paste(root,climat,scenario,sep='/'))
+
+load(paste(climat,scenario,gcm,'Global_Output.RData',sep='_'))
+Global_Output$Scenario <- scenario
+DailyOptimum <- merge(ToSearch,Global_Output,
+                          by=c('Title','Scenario','GCM','Clim','Genotype'),
+                          all.x=T,all.y=F)
+
+
+#################################
+
+rm(Global_Output)
+DailyOptimum_Ordered <- DailyOptimum[with(DailyOptimum, order(Title,Scenario,GCM,Clim,-year,DaysAfterSowing)),]
+
+# Calculate each variable :
+SowDate <- aggregate(Date~Title+Scenario+GCM+Clim+year,subset(DailyOptimum,stagename=='sowing'),FUN = min,na.rm=T)
+
+FloweringDate <- aggregate(Date~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum_Ordered,stagename=='flowering'),FUN = min,na.rm=T)
+
+
+#################################
+
+SowDate <- aggregate(Date~Title+Scenario+GCM+Clim+year,
+                     subset(DailyOptimum,stagename=='sowing'),FUN = min,na.rm=T)
+
+SowDate$Doy <- as.numeric(strftime(as.Date(SowDate$Date, "%d/%m/%Y"),format = "%j") )
+
+FloweringDate <- aggregate(day~Title+Scenario+GCM+Clim+year,
+                           subset(DailyOptimum,stagename=='flowering'),FUN = min,na.rm=T)
+
+
+hist(SowDate$Doy)
+
+colnames(DailyOptimum)
+
+Test <- subset(DailyOptimum,stagename=='flowering' & (Title == ' Germany_Werl'))
+
+Test2 <- aggregate(day~year,Test,FUN = min,na.rm=T)
+
+plot(Test2$day,Test2$Stage)
+
+unique(DailyOptimum$Title)
+
+```
+
+
+```{r Get Optimum Variable A}
+
+## Load The simulation for the optimum genotype :
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimA_Optimum.RData')
+MyGenotypes <- subset(ClimA_Optimum,select=c('Title','Scenario','Clim','GCM','Genotype'))
+
+climat <- 'ClimA'
+root <- 'F:/Sebastien/Sims Margot/4- Outputs'
+
+# WW & WD :
+ClimA_Variables_WW <- GetVariablesFromDaily(MyGenotypes,'Well_Watered','Density',climat,root)
+ClimA_Variables_WD <- GetVariablesFromDaily(MyGenotypes,'Rainfed','Density',climat,root)
+ClimA_Variables_Irr <- GetVariablesFromDaily(MyGenotypes,'Irr','Density',climat,root)
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+ClimA_Variables_Density <- bind_rows(ClimA_Variables_WD,ClimA_Variables_WW,ClimA_Variables_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimA_Variables_Density,file='ClimA_Variables_Density.RData')
+
+```
+
+## Work on actual climate : 
+```{r Get Optimum Flowering Actual}
+
+###Chargement de la carte du monde (fortity --> permet d'utiliser ggplot)
+WorldMap <- getMap(resolution = "low")
+WorldMap2 <- fortify(WorldMap)
+  
+##Relief
+setwd('F:/Sebastien/Sims Margot/5- Data')
+Site_coord<-read.table('sites_coord.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+Alt<-getData("worldclim",var="alt",res=10)
+ALT<-as.data.frame(Alt,xy=TRUE,na.rm=TRUE)
+names(ALT)<-c('long','lat','alt')
+test<-subset(ALT,long>=min(Site_coord$Lon)-1 & long<=max(Site_coord$Lon)+1 
+             & lat>=min(Site_coord$Lat)-1 & lat <=max(Site_coord$Lat)+1)
+ALTITUDE<-subset(test,alt>850)
+names(ALTITUDE)<-c('LON','LAT','ALT')
+  
+####Selection des pays non ?tudi?s sur la carte d'Europe
+England<-subset(WorldMap2,id=="United Kingdom")
+  
+###Couche Oc?an
+setwd("F:/Sebastien/Sims Margot/5- Data/ne_50m_ocean")
+Ocean<-readShapePoly("ne_50m_ocean.shp")
+Ocean2<-fortify(Ocean)
+
+#####2. Sites MAP#####
+setwd('F:/Sebastien/Sims Margot/5- Data')
+Site_coord_map<-read.table('sites_coord_carte.csv',sep=',',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord_map$site<-as.factor(Site_coord_map$site)
+
+load('ClimA_Optimum.RData')
+load('ClimA_Variables.RData')
+
+ClimA_Variables$DateFlo <- as.numeric(strftime(as.Date(ClimA_Variables$Date.y, "%d/%m/%Y"),format = "%j") )
+MeanFLowering <- aggregate(DateFlo~Title+Scenario,ClimA_Variables,mean,na.rm=T)
+SitesLateFlo <- subset(MeanFLowering,DateFlo>=213)
+OrderedSitesWW <- subset(MeanFLowering[order(-MeanFLowering$DateFlo),],Scenario=="Well_Watered")
+OrderedSitesWD <- subset(MeanFLowering[order(-MeanFLowering$DateFlo),],Scenario=="Rainfed")
+OrderedSitesIrr <- subset(MeanFLowering[order(-MeanFLowering$DateFlo),],Scenario=="Irr")
+OrderedSites <- MeanFLowering[order(-MeanFLowering$DateFlo),]
+
+colnames(Site_coord_map) <-  c('Lon','Lat','Title')
+DataToPlot <- merge(Site_coord_map,OrderedSitesWW)
+
+ggplot(DataToPlot,aes(Lon,Lat))+
+  geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+  geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+  geom_point(data=DataToPlot, aes(Lon, Lat, color=DateFlo), shape=19, size=8)+
+  scale_color_gradientn('Flowering doy',colours=rev(brewer.pal(11,'Spectral')))+
+  geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+  theme_map()+
+  coord_quickmap(xlim = c(min(Site_coord$Lon)-1,max(Site_coord$Lon)+1),
+                 ylim= c(min(Site_coord$Lat)-1,max(Site_coord$Lat)+1), 
+                 expand=FALSE)
+
+
+
+```
+
+
+# 2 / Climate F1 :
+
+```{r Test }
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimF1_Variables.RData')
+
+Test <- subset(Outputs,Title==' Greece_Evropos')
+
+```
+
+
+```{r Load Data - F1 WD}
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Rainfed'
+
+
+## Clim F1 / WD :
+## --------------
+
+
+# Harvest :
+load('ClimF1_Rainfed_GCM1_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF1_WD_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WD_1$Scenario <- Scenario
+
+load('ClimF1_Rainfed_GCM2_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF1_WD_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WD_2$Scenario <- Scenario
+
+load('ClimF1_Rainfed_GCM3_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF1_WD_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WD_3$Scenario <- Scenario
+
+load('ClimF1_Rainfed_GCM4_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF1_WD_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WD_4$Scenario <- Scenario
+
+HarvestData_ClimF1_WD <- bind_rows(HarvestData_ClimF1_WD_1,
+                               HarvestData_ClimF1_WD_2,
+                               HarvestData_ClimF1_WD_3,
+                               HarvestData_ClimF1_WD_4)
+rm(HarvestData_ClimF1_WD_1,HarvestData_ClimF1_WD_2,HarvestData_ClimF1_WD_3,HarvestData_ClimF1_WD_4)
+
+```
+
+```{r Load Data - F1 WW}
+
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Well_Watered'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimF1/Well_Watered')
+
+# Clim F1 / WW :
+load('ClimF1_Well_Watered_GCM1_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_WW_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WW_1$Scenario <- Scenario
+
+load('ClimF1_Well_Watered_GCM2_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_WW_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WW_2$Scenario <- Scenario
+
+load('ClimF1_Well_Watered_GCM3_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_WW_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WW_3$Scenario <- Scenario
+
+load('ClimF1_Well_Watered_GCM4_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_WW_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_WW_4$Scenario <- Scenario
+
+HarvestData_ClimF1_WW <- bind_rows(HarvestData_ClimF1_WW_1,
+                               HarvestData_ClimF1_WW_2,
+                               HarvestData_ClimF1_WW_3,
+                               HarvestData_ClimF1_WW_4)
+rm(HarvestData_ClimF1_WW_1,HarvestData_ClimF1_WW_2,HarvestData_ClimF1_WW_3,HarvestData_ClimF1_WW_4)
+
+```
+
+```{r Load Data - F1 Irr}
+
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Irr'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimF1/Irr')
+
+# Clim F1 / Irr :
+load('ClimF1_Irr_GCM1_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_Irr_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_Irr_1$Scenario <- Scenario
+
+load('ClimF1_Irr_GCM2_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_Irr_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_Irr_2$Scenario <- Scenario
+
+load('ClimF1_Irr_GCM3_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_Irr_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_Irr_3$Scenario <- Scenario
+
+load('ClimF1_Irr_GCM4_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF1_Irr_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF1_Irr_4$Scenario <- Scenario
+
+HarvestData_ClimF1_Irr <- bind_rows(HarvestData_ClimF1_Irr_1,
+                               HarvestData_ClimF1_Irr_2,
+                               HarvestData_ClimF1_Irr_3,
+                               HarvestData_ClimF1_Irr_4)
+
+rm(HarvestData_ClimF1_Irr_1,HarvestData_ClimF1_Irr_2,HarvestData_ClimF1_Irr_3,HarvestData_ClimF1_Irr_4)
+
+```
+
+```{r Save data F1}
+
+ClimF1_Harvest <- rbind(HarvestData_ClimF1_WW,HarvestData_ClimF1_WD,HarvestData_ClimF1_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF1_Harvest,file='ClimF1_Harvest.RData')
+
+# rm(ClimF1_Harvest)
+# ClimF1_July <- rbind(JulyData_ClimF1_WW,JulyData_ClimF1_WD)
+# setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+# save(ClimF1_July,file='ClimF1_July.RData')
+# #rm(ClimF1_July)
+
+```
+
+```{r Get Optimum genotype F1}
+
+# Load Harvest data ;
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimF1_Harvest.RData')
+
+
+# Mean sur ann?es puis max : 
+Genotype_Mean <- aggregate(yield~Genotype+Title+Clim+Scenario,ClimF1_Harvest,FUN = mean,na.rm=T)
+ClimF1_Optimum <- merge(aggregate(yield~Title+Clim+Scenario,
+                                  Genotype_Mean,FUN = max,na.rm=T),Genotype_Mean)
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF1_Optimum,file='ClimF1_Optimum.RData')
+#rm(ClimF1_Optimum)
+
+```
+
+```{r Get Optimum Variable F1}
+
+## Load The simulation for the optimum genotype :
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimF1_Optimum.RData')
+MyGenotypes <- subset(ClimF1_Optimum,select=c('Title','Scenario','Clim','Genotype'))
+
+climat <- 'ClimF1'
+root <- 'F:/Sebastien/Sims Margot/4- Outputs'
+
+# WW :
+scenario <- 'Well_Watered'
+ClimF1_Variables_WW <- rbind(GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM4',climat,root))
+                
+
+# WD :
+scenario <- 'Rainfed'
+ClimF1_Variables_WD <- rbind(GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM4',climat,root))
+
+
+# Irr :
+scenario <- 'Irr'
+ClimF1_Variables_Irr <- rbind(GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM4',climat,root))
+
+ClimF1_Variables <- bind_rows(ClimF1_Variables_WD,ClimF1_Variables_WW,ClimF1_Variables_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF1_Variables,file='ClimF1_Variables.RData')
+
+
+head(ClimF1_Variables)
+```
+
+# 3 / Climate F2 :
+
+```{r Load Data - F2 WD}
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Rainfed'
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimF2/Rainfed')
+
+## Clim F2 / WD :
+## --------------
+
+# Harvest : ----
+load('ClimF2_Rainfed_GCM1_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WD_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WD_1$Scenario <- Scenario
+
+load('ClimF2_Rainfed_GCM2_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WD_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WD_2$Scenario <- Scenario
+
+load('ClimF2_Rainfed_GCM3_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WD_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WD_3$Scenario <- Scenario
+
+load('ClimF2_Rainfed_GCM4_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WD_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WD_4$Scenario <- Scenario
+
+HarvestData_ClimF2_WD <- bind_rows(HarvestData_ClimF2_WD_1,HarvestData_ClimF2_WD_2,
+                                   HarvestData_ClimF2_WD_3,HarvestData_ClimF2_WD_4)
+
+rm(HarvestData_ClimF2_WD_1,HarvestData_ClimF2_WD_2,HarvestData_ClimF2_WD_3,HarvestData_ClimF2_WD_4)
+
+```
+
+```{r Load Data - F2 WW}
+
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Well_Watered'
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimF2/Well_Watered')
+
+## Clim F2 / WW :
+## --------------
+
+# Harvest : ----
+
+load('ClimF2_Well_Watered_GCM1_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WW_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WW_1$Scenario <- Scenario
+
+load('ClimF2_Well_Watered_GCM2_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WW_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WW_2$Scenario <- Scenario
+
+load('ClimF2_Well_Watered_GCM3_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WW_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WW_3$Scenario <- Scenario
+
+load('ClimF2_Well_Watered_GCM4_Global_Output.RData')
+HarvestData <- Get_Harvest_Data(Global_Output,
+                                list(Global_Output$year,Global_Output$Title,Global_Output$Genotype))
+rm(Global_Output)
+HarvestData_ClimF2_WW_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_WW_4$Scenario <- Scenario
+
+HarvestData_ClimF2_WW <- bind_rows(HarvestData_ClimF2_WW_1,
+                               HarvestData_ClimF2_WW_2,
+                               HarvestData_ClimF2_WW_3,
+                               HarvestData_ClimF2_WW_4)
+rm(HarvestData_ClimF2_WW_1,HarvestData_ClimF2_WW_2,HarvestData_ClimF2_WW_3,HarvestData_ClimF2_WW_4)
+
+
+```
+
+```{r Load Data - F2 Irr}
+
+
+Colnames <- c('Title','year','Clim','GCM','Genotype','yield','biomass','GrainNo','TT')
+Scenario <- 'Irr'
+setwd('F:/Sebastien/Sims Margot/4- Outputs/ClimF2/Irr')
+
+# Clim F1 / Irr :
+load('ClimF2_Irr_GCM1_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF2_Irr_1 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_Irr_1$Scenario <- Scenario
+
+load('ClimF2_Irr_GCM2_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF2_Irr_2 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_Irr_2$Scenario <- Scenario
+
+load('ClimF2_Irr_GCM3_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF2_Irr_3 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_Irr_3$Scenario <- Scenario
+
+load('ClimF2_Irr_GCM4_Global_Output.RData')
+By=list(Global_Output$year,Global_Output$Title,Global_Output$Genotype)
+HarvestData <- Get_Harvest_Data(Global_Output,By)
+rm(Global_Output)
+HarvestData_ClimF2_Irr_4 <- subset(HarvestData,select=Colnames)
+rm(HarvestData)
+HarvestData_ClimF2_Irr_4$Scenario <- Scenario
+
+HarvestData_ClimF2_Irr <- bind_rows(HarvestData_ClimF2_Irr_1,
+                               HarvestData_ClimF2_Irr_2,
+                               HarvestData_ClimF2_Irr_3,
+                               HarvestData_ClimF2_Irr_4)
+
+rm(HarvestData_ClimF2_Irr_1,HarvestData_ClimF2_Irr_2,HarvestData_ClimF2_Irr_3,HarvestData_ClimF2_Irr_4)
+
+```
+
+
+```{r Save data F2}
+
+ClimF2_Harvest <- rbind(HarvestData_ClimF2_WW,HarvestData_ClimF2_WD,HarvestData_ClimF2_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF2_Harvest,file='ClimF2_Harvest.RData')
+#rm(ClimF2_Harvest)
+
+# ToSave <- rbind(JulyData_ClimF2_WW,JulyData_ClimF2_WD)
+# setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+# save(ToSave,file='ClimF2_July.RData')
+
+```
+
+```{r Get Optimum genotype F2}
+
+# Load Harvest data ;
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimF2_Harvest.RData')
+
+# Mean sur ann?es puis max : 
+Genotype_Mean <- aggregate(yield~Genotype+Title+Clim+GCM+Scenario,ClimF2_Harvest,FUN = mean,na.rm=T)
+ClimF2_Optimum <- merge(aggregate(yield~Title+Clim+GCM+Scenario,Genotype_Mean,FUN = max,na.rm=T),Genotype_Mean)
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF2_Optimum,file='ClimF2_Optimum.RData')
+#rm(ClimF2_Optimum)
+
+```
+
+```{r Get Optimum Variable F2}
+
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+load('ClimF2_Optimum.RData')
+MyGenotypes <- subset(ClimF2_Optimum,select=c('Title','Scenario','Clim','Genotype'))
+
+climat <- 'ClimF2'
+root <- 'F:/Sebastien/Sims Margot/4- Outputs'
+
+# WW :
+scenario <- 'Well_Watered'
+ClimF2_Variables_WW <- rbind(GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM4',climat,root))
+                
+
+# WD :
+scenario <- 'Rainfed'
+ClimF2_Variables_WD <- rbind(GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root),
+                GetVariablesFromDaily(MyGenotypes,scenario,'GCM4',climat,root))
+
+
+# Irr :
+scenario <- 'Irr'
+VariablesGCM1 <- GetVariablesFromDaily(MyGenotypes,scenario,'GCM1',climat,root)
+VariablesGCM2 <- GetVariablesFromDaily(MyGenotypes,scenario,'GCM2',climat,root)
+VariablesGCM3 <- GetVariablesFromDaily(MyGenotypes,scenario,'GCM3',climat,root)
+VariablesGCM4 <- MyDataToSave_Final
+ClimF2_Variables_Irr <- rbind(VariablesGCM1,VariablesGCM2,VariablesGCM3,VariablesGCM4)
+
+ClimF2_Variables <- bind_rows(ClimF2_Variables_WD,ClimF2_Variables_WW,ClimF2_Variables_Irr)
+setwd('F:/Sebastien/Sims Margot/4- Outputs/Global')
+save(ClimF2_Variables,file='ClimF2_Variables.RData')
+
+
+head(ClimF1_Variables)
+
+
+
+
+####### TESTS SUMRAD : ########
+
+ToPlot_F1 <- subset(DailyOptimum_Ordered,Title==' Austria_Leibnitz' & GCM == 'GCM1' & Clim=='ClimF1' & year==2050)
+ToPlot_F2 <- subset(DailyOptimum_Ordered,Title==' Austria_Leibnitz' & GCM == 'GCM1' & Clim=='ClimF2' & year==2050)
+
+
+ggplot()+
+  geom_line(data=ToPlot_F2,aes(x=day,y=radn_int),color='red')+
+  geom_line(data=ToPlot_F1,aes(x=day,y=radn_int),color='blue')
+  
+
+sum(ToPlot_F2$radn_int)
+
+
+```
+
+#############################################################
+############################################################

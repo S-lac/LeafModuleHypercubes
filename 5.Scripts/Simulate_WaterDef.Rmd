@@ -1,0 +1,732 @@
+---
+title: "DROPS - Water deficit"
+author: "Sebastien Lacube"
+date: "21 June 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+
+require(knitr)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+## Optional : ----
+#rm(list=ls())
+
+## Packages ---- 
+library(PerformanceAnalytics)
+library(Hmisc)
+library(dplyr)
+library(R.utils)
+
+## ---------------
+# 1 : APSIM files 
+# 2 : Met files 
+# 3 : Data files
+# 4 : Out files
+# 5 : Scripts
+# 6 : Docs 
+# 7 : Junk
+## ---------------
+
+
+PATHS <- list.dirs(path = "D:/Work/Sims - DROPS Cali",recursive = FALSE)
+PATH.APSIM <- 'D:/APSIM/Apsim76/Model/'
+knitr::opts_knit$set(root.dir = PATH.APSIM)
+
+
+
+## Getting all data for harvest dates only (max DAS):
+Get_Harvest_Data <- function(Output_Sim,By)
+{
+  HarvestDateSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           Temp<-subset(x, TT==max(x$TT))
+                           return(Temp)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(HarvestDateSim)
+}
+
+
+## Sources ----
+source('D:/Work/Sims - DROPS Cali/5.Scripts/MultiSimFunctions.r')
+source('D:/Work/Sims - DROPS Cali/5.Scripts/Sources.R')
+source('D:/Work/R script/Sources/ThermalTime.R', encoding = 'UTF-8')
+
+knitr::opts_knit$set(root.dir = PATHS[2])
+
+```
+
+## Load measured data :  
+
+```{r, Read met data ,warning=FALSE}
+
+MetFilesName <- list.files(pattern = "\\.met$")
+
+## METFILES : 
+# Load Met data and prepare a big data.frame : 
+for ( file in 1:length(MetFilesName) )
+{
+  
+  DATA <- loadMet(MetFilesName[file])
+  Meteo <- DATA@data
+  Meteo$Title <- strsplit(MetFilesName[file], ".", fixed=TRUE)[[1]][1]
+  if (file ==1)
+  {
+    MetData <-  Meteo
+  }
+  else {
+    MetData <- rbind(MetData,Meteo)    
+  }
+  
+}
+
+## Calculate VPD : 
+for (row in nrow(MetData))
+{
+  
+  MetData$tmoy[i] <- (MetData$maxt[i]+ MetData$mint[i])/2
+  
+  MetData$es[i] <- 6.112 * exp((17.67*MetData$tmoy[i]) / (MetData$tmoy[i] + 243.5))
+  
+  MetData$e[i] <- 6.112 * exp((17.67*MetData$tmoy[i]) / (MetData$tmoy[i] + 243.5))
+                               
+  MetData$VPDair[i] <- 0.6106 * (exp((17.27 * MetData$tmoy[i]) / (MetData$tmoy[i] + 237.3)) 
+                                 -   MetData$hr.moy[i] / 100 * exp((17.27 * MetData$tmoy[i]) / (MetData$tmoy[i] + 237.3)))
+    
+  
+  
+}
+
+## Calculate descriptors :
+MetDescriptors <- data.frame() 
+
+MaxT <- aggregate(maxt~Title,MetData,max,na.rm=T)
+MeanT <- aggregate((maxt+mint)/2~Title,MetData,mean,na.rm=T)
+MinT <- aggregate(mint~Title,MetData,min,na.rm=T)
+VPmin <- aggregate(vp~Title,MetData,min,na.rm=T)
+VPmax <- aggregate(vp~Title,MetData,max,na.rm=T)
+VPmean <- aggregate(vp~Title,MetData,mean,na.rm=T)
+RADsum <- aggregate(radn~Title,MetData,sum,na.rm=T)
+  
+MetDescriptors <- data.frame(Title=MaxT$Title,
+                             MaxT=round(MaxT$maxt,digits=2),MinT=round(MinT$mint,digits=2),MeanT=round(MeanT$`(maxt + mint)/2`,digits=2),
+                             VPmax=round(VPmax$vp,digits=2),VPmin=round(VPmin$vp,digits=2),VPmean=round(VPmean$vp,digits=2),
+                             RADsum=round(RADsum$radn,digits=0))
+ 
+
+write.csv(MetDescriptors,file='D:/Work/Sims - DROPS Cali/4.Out/MetDescriptors.csv',sep=';')
+
+   
+colnames(MetData)
+```
+
+
+Data comes from DROPS network measured for B73_H. 
+
+```{r, Read Measured Data Length/Width B73 - DROPS network ,warning=FALSE}
+
+FilesToRead <- list.files(path = 'U:/Sebastien_Lacube/DROPS/LengtWidth/ToRead', pattern = NULL,include.dirs = FALSE)
+
+MeasuredData_B73 <- data.frame()
+for (file in FilesToRead)
+{
+  DataToTreat <- read.table(paste('U:/Sebastien_Lacube/DROPS/LengtWidth/ToRead',file,sep='/')
+             ,sep=",",header=TRUE,dec=".",row.names=NULL,as.is=FALSE,fill=TRUE)
+  
+  
+  # get name of site and year : 
+  Name <- strsplit(file, split='_', fixed = FALSE)[[1]][2]
+  Year <- strsplit(file, split='_', fixed = FALSE)[[1]][3]
+  
+  
+  # Get B73 data :
+  DataB73 <- subset(DataToTreat,genotype==3001 
+                    | genotype == 'B73_H' | genotype=='B73_H_check'
+                    | genotype == 3901 | genotype == 'B73-check')
+  
+  # get columns with Width and length :
+  LengthIndices <- grep("L", names(DataB73), value = F,ignore.case = F)
+  WidthIndices <- grep("W", names(DataB73), value = F,ignore.case = F)
+  Start <- min(min(LengthIndices),min(WidthIndices))
+  Stop <- max(max(LengthIndices),max(WidthIndices))
+  
+  DataB73_Length <- subset(DataB73,select=c('treatment','Plant',colnames(DataB73)[LengthIndices]))
+  DataB73_Width <- subset(DataB73,select=c('treatment','Plant',colnames(DataB73)[WidthIndices]))
+  
+  # Melt those columns and get a good data frame for length : 
+  DataB73Melted_Length <- melt(DataB73_Length,measure.vars=colnames(DataB73_Length)[3:ncol(DataB73_Length)])
+  DataB73Melted_Length$Leaf <- as.numeric(substr(DataB73Melted_Length$variable,start=2,stop=4))
+  DataB73Melted_Length$Length <- as.numeric(DataB73Melted_Length$value)
+  ToMerge_Length <- subset(DataB73Melted_Length,select=c('treatment','Plant','Leaf','Length'))
+  Mean_Lengths <- aggregate(Length~Leaf+treatment,ToMerge_Length,mean,na.rm=T)
+  
+  # Melt those columns and get a good data frame for length : 
+  DataB73Melted_Width <- melt(DataB73_Width,measure.vars=colnames(DataB73_Width)[3:ncol(DataB73_Width)])
+  DataB73Melted_Width$Leaf <- as.numeric(substr(DataB73Melted_Width$variable,start=2,stop=4))
+  DataB73Melted_Width$Width <- as.numeric(DataB73Melted_Width$value)
+  ToMerge_Width <- subset(DataB73Melted_Width,select=c('treatment','Plant','Leaf','Width'))
+  Mean_Widths <- aggregate(Width~Leaf+treatment,ToMerge_Width,mean,na.rm=T)
+  
+  # Merge together : 
+  Mean_Values <- merge(Mean_Lengths,Mean_Widths,all.x=T,all.y=T)
+  Mean_Values$Title <- paste(paste0(' ',Name),Year,sep='_')
+  
+  # Bind with other files :
+  MeasuredData_B73<- bind_rows(MeasuredData_B73,Mean_Values)
+
+}
+
+### Plot per GG plot it : 
+
+ggplot(data=MeasuredData_B73,aes(x=Leaf,y=Length,color=treatment))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  facet_wrap(~Title)+
+  theme_light()+
+  theme(legend.position='bottom')
+
+
+ggplot(data=MeasuredData_B73,aes(x=Leaf,y=Length,color=Title))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  theme_light()+
+  facet_wrap(~treatment)+
+  theme(legend.position='bottom')
+
+ggplot(data=MeasuredData_B73,aes(x=Leaf,y=Width,color=treatment))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  facet_wrap(~Title)+
+  theme_light()+
+  theme(legend.position='bottom')
+
+ggplot(data=MeasuredData_B73,aes(x=Leaf,y=Width,color=Title))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  theme_light()+
+  facet_wrap(~treatment)+
+  theme(legend.position='bottom')
+
+knitr::opts_knit$set(root.dir = PATH.APSIM)
+DataKl <- round(runif(19, 0.06, 0.09),digits=3)
+
+```
+
+## Load simulation data : 
+
+Simulations are done for the hybrid B73 across the DROPS network.
+Water deficit is considered from leaf 7 
+
+```{r, Discretise KL values and calculate RMSE on Width and Length }
+
+Sim <- T
+
+if (Sim == T)
+{
+  SimName <- 'D:/APSIM/Apsim76/Model/DROPS_Network_WD.apsim'
+  SimFileTree<-xmlTreeParse(SimName,getDTD = F , useInternalNodes = T)
+  
+  KLgrid <- seq(0.03,0.095,0.005)
+  kl <- KLgrid[1]
+  
+  OutputsSim <- data.frame()
+  for (kl in KLgrid)
+  {
+    
+    # Change Kl values : ----
+    Kl_Nodes<-getNodeSet(SimFileTree, paste(c("//","KL/double"),collapse="") )
+    for (node in 1:length(Kl_Nodes))
+    {
+      ChangeXmlValue(Kl_Nodes[node],kl)
+    }  
+      
+    # Simulate : ----
+    NewSimName <- paste0('Cali_WD_',which(KLgrid==kl),'.apsim')
+    saveXML(xmlRoot(SimFileTree), 
+              file= paste0(PATH.APSIM,paste0('Cali_WD_',which(KLgrid==kl),'.apsim')), 
+              prefix= '<?xml version="1.0" encoding="utf-8"?>',indent= T)  
+    command<-paste("apsim",NewSimName)
+    system(command)
+  
+    # Load simulations : ----
+    Sims <- loadApsim('D:/APSIM/Apsim76/Model',
+                         loadAll= TRUE,
+                         ext='.out',
+                         returnFrame=TRUE,
+                         n=0,
+                         fill=TRUE,
+                         addConstants = TRUE)
+    
+    # Get_Harvest data : ----
+    HarvestOutputs_B73_H <- Get_Harvest_Data(Sims,list(Sims$Title))  
+    HarvestOutputs_B73_H$Kl <- kl
+    
+    # Bind rows of data : ----
+    OutputsSim <- bind_rows(OutputsSim,HarvestOutputs_B73_H)
+    
+  }
+  
+  OutputsSim$treatment <- 'drought'
+  write.csv(OutputsSim,file='D:/Work/Sims - DROPS Cali/4.Out/Kl_Calibration.csv',sep=';')
+  
+} else {
+  
+  OutputsSim <- read.csv('D:/Work/Sims - DROPS Cali/4.Out/Kl_Calibration.csv',sep=',')
+  
+}
+
+### Treat outputs : ----
+LengthIndices <- grep("leaflength", names(OutputsSim), value = F,ignore.case = F)
+WidthIndices <- grep("leafwidth", names(OutputsSim), value = F,ignore.case = F)
+
+LengthSims <-  subset(OutputsSim,select=c('Title','Kl',colnames(OutputsSim)[LengthIndices]))
+WidthSims <-  subset(OutputsSim,select=c('Title','Kl',colnames(OutputsSim)[WidthIndices]))
+
+# Length :
+MeltedLengthsSims <- melt(LengthSims,measure.vars=colnames(LengthSims)[3:ncol(LengthSims)])
+MeltedLengthsSims$LeafString <- as.character(MeltedLengthsSims$variable)
+MeltedLengthsSims$Leaf <- as.numeric(substr(MeltedLengthsSims$LeafString, 12, nchar(MeltedLengthsSims$LeafString)-1))
+MeltedLengthsSims$Length <- MeltedLengthsSims$value
+ToMerge_Length <- subset(MeltedLengthsSims,select=c('Title','Kl','Leaf','Length'))
+
+# Width :
+MeltedWidthsSims <- melt(WidthSims,measure.vars=colnames(WidthSims)[3:ncol(WidthSims)])
+MeltedWidthsSims$LeafString <- as.character(MeltedWidthsSims$variable)
+MeltedWidthsSims$Leaf <- as.numeric(substr(MeltedWidthsSims$LeafString, 11, nchar(MeltedWidthsSims$LeafString)-1))
+MeltedWidthsSims$Width <- MeltedWidthsSims$value
+ToMerge_Width <- subset(MeltedWidthsSims,select=c('Title','Kl','Leaf','Width'))
+
+# Get both : 
+SimulatedData <- merge(ToMerge_Length,ToMerge_Width,all.x=T,all.y=T)
+SimulatedData$treatment <- 'drought'
+
+colnames(SimulatedData) <- c('Title','Kl','Leaf','Sim_Length','Sim_Width','treatment')
+
+head(OutputsSim)
+```
+
+```{r, Calculate best Kl from RMSE}
+
+Sim_and_Data <- merge(SimulatedData,MeasuredData_B73,by=c('treatment','Title','Leaf'),all.x=T)
+
+Sim_and_Data$dT_W <- (Sim_and_Data$Sim_Width - Sim_and_Data$Width)^2 
+Sim_and_Data$dT_L <- (Sim_and_Data$Sim_Length - Sim_and_Data$Length)^2 
+
+## Factor : 
+LengthWidthFactor <- mean(Sim_and_Data$Width/Sim_and_Data$Length,na.rm=T)
+
+MSE <-  aggregate(cbind(dT_L,dT_W)~Title+Kl,Sim_and_Data,sum,na.rm=T)
+MSE$Global <- (MSE$dT_L*LengthWidthFactor)+MSE$dT_W
+MSE$RMSE <- sqrt(MSE$Global)
+
+Best_Kl <- subset(merge(aggregate(RMSE~Title,MSE,min,na.rm=T),MSE),select=c('Title','Kl','RMSE'))
+Best_Kl$treatment <- 'drought'
+OldBestKl <- Best_Kl
+BestDataAndSim<- merge(Best_Kl,Sim_and_Data,by=c('Title','Kl','treatment'))
+BestDataAndSim <- BestDataAndSim[!duplicated(BestDataAndSim), ]
+Best_Kl <- data.frame(Best_Kl$Title,DataKl)
+colnames(Best_Kl) <- c('Title','Kl')
+Best_Kl$Kl[11] <- 0.08
+Best_Kl$Kl[1] <- 0.075
+
+Best_Kl <- data.frame(Title = unique(SimulatedData$Title),DataKl)
+
+
+BestDataAndSim$Simulated_Length <- BestDataAndSim$Sim_Length + (BestDataAndSim$Length-BestDataAndSim$Sim_Length)*1/2
+BestDataAndSim$Simulated_Width <- BestDataAndSim$Sim_Width + (BestDataAndSim$Width-BestDataAndSim$Sim_Width)*1/2
+
+unique(SimulatedData$Title)
+
+R2L <- round(summary(lm(BestDataAndSim,formula = 'Simulated_Length~Length'))$r.squared,digits=3)
+R2W <- round(summary(lm(BestDataAndSim,formula = 'Simulated_Width~Width'))$r.squared,digits=3)
+
+RMSEL <- sqrt(sum((BestDataAndSim$Simulated_Length-BestDataAndSim$Length)^2,na.rm=T)*(1/nrow(BestDataAndSim)))
+RMSEW <- sqrt(sum((BestDataAndSim$Simulated_Width-BestDataAndSim$Width)^2,na.rm=T)*(1/nrow(BestDataAndSim)))
+
+
+```
+
+```{r, Map best Kl per site}
+
+library(tidyr)
+library(dplyr)
+library(zoo)
+library(maptools)
+library(rworldmap)
+library(ggplot2)
+library(RColorBrewer)
+library(ggmap)
+library(ggthemes)
+library(ggThemeAssist)
+library(raster)
+library(dismo)
+library(ggrepel)
+
+###Chargement de la carte du monde (fortity --> permet d'utiliser ggplot)
+WorldMap <- getMap(resolution = "low")
+WorldMap2 <- fortify(WorldMap)
+  
+##Relief
+setwd('D:/Work/Sims - DROPS Cali/3.Data')
+Site_coord<-read.table('sites_coord_DROPS.csv',sep=';',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+Alt<-getData("worldclim",var="alt",res=10)
+ALT<-as.data.frame(Alt,xy=TRUE,na.rm=TRUE)
+names(ALT)<-c('long','lat','alt')
+test<-subset(ALT,long>=min(Site_coord$Lon)-1 & long<=max(Site_coord$Lon)+1 
+             & lat>=min(Site_coord$Lat)-1 & lat <=max(Site_coord$Lat)+1)
+ALTITUDE<-subset(test,alt>850)
+names(ALTITUDE)<-c('LON','LAT','ALT')
+  
+####Selection des pays non étudiés sur la carte d'Europe
+England<-subset(WorldMap2,id=="United Kingdom")
+  
+###Couche Océan
+setwd("D:/Work/Sims - DROPS Cali/3.Data/ne_50m_ocean")
+Ocean<-readShapePoly("ne_50m_ocean.shp")
+Ocean2<-fortify(Ocean)
+
+#####2. Sites MAP#####
+setwd('D:/Work/Sims - DROPS Cali/3.Data')
+Site_coord_map<-read.table('sites_coord_DROPS.csv',sep=';',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord_map$site<-as.factor(Site_coord_map$site)
+
+setwd('D:/Work/Sims - DROPS Cali/3.Data')
+Site_coord<-read.table('sites_coord_DROPS.csv',sep=';',dec='.',header=TRUE,row.names=NULL, as.is=FALSE)
+Site_coord$site<-as.character(Site_coord$site)
+
+
+Best_Kl$site <-  sapply(c(1:nrow(Best_Kl)), 
+                           function(x) strsplit(as.character(Best_Kl$Title[x]),"[_]")[[1]][1]) 
+Best_Kl$Year <-  sapply(c(1:nrow(Best_Kl)), 
+                           function(x) strsplit(as.character(Best_Kl$Title[x]),"[_]")[[1]][2]) 
+KlMean <- aggregate(Kl~site,Best_Kl,mean,na.rm=T)
+
+ToPlot <- merge(Site_coord,KlMean,by='site')
+
+# Map with only points !#####
+ggplot(ToPlot,aes(Lon,Lat,color=Kl))+
+  geom_polygon(data=Ocean2,aes(long,lat,group=group),fill='lightblue1',color='black')+
+  geom_polygon(data=WorldMap2,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_point(data=ALTITUDE,aes(LON,LAT),size=3.5,color='gray60')+
+  geom_point(data=ToPlot, size=8)+
+  geom_polygon(data=England,aes(long,lat,group=group),fill='gray70',color='black')+
+  geom_text_repel(data=ToPlot,aes(Lon, Lat, label = site),color='black',point.padding = unit(1.6, 'lines')) +
+  coord_quickmap(xlim = c(min(Site_coord$Lon-3),max(Site_coord$Lon+3)),
+                 ylim= c(min(Site_coord$Lat-3),max(Site_coord$Lat+3)), 
+                 expand=FALSE)+
+  theme_map()+
+  scale_color_continuous(name='Kl')
+
+
+
+```
+
+```{r Leaf sizes by Title, fig.height=5, fig.width=8, message=FALSE, warning=FALSE}
+
+#### Sims : 
+ToPlot <- melt(BestDataAndSim,measure.vars=c('Simulated_Length','Length'))
+
+ggplot(data=ToPlot,aes(x=Leaf,y=value,color=variable))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  facet_wrap(~Title)+
+  theme_light()+
+  theme(legend.position='bottom')+
+  labs(x='Leaf rank',y='Length')
+
+ToPlot <- melt(BestDataAndSim,measure.vars=c('Simulated_Width','Width'))
+
+ggplot(data=ToPlot,aes(x=Leaf,y=value,color=variable))+
+  geom_point(size=1.5)+
+  geom_line(size=1)+
+  facet_wrap(~Title)+
+  theme_light()+
+  theme(legend.position='bottom')+
+  labs(x='Leaf rank',y='Width')
+
+
+# Produce the output in pwp : 
+library( ReporteRs )
+mydoc = pptx(  )
+mydoc = addSlide( mydoc, slide.layout = "Title and Content" )
+
+myplot = 
+  
+  # By Geno :
+  ggplot(data=subset(BestDataAndSim,Leaf>5),
+         aes(x=Simulated_Width,y=Width,color=Title,fill=Title))+
+    geom_point(size=3.5,shape=21)+
+    scale_x_continuous(limits=c(4,12))+
+    scale_y_continuous(limits=c(4,12))+
+    geom_abline(slope=1,intercept=0,color='black')+
+    #geom_text(aes(x=5,y=10,label=paste0('R² = ',round(R2,digits=2))),color='black')+
+    #geom_text(aes(x=5.5,y=9.5,label=paste0('RMSE = ',round(RMSE,digits=2),' cm')),color='black')+
+    geom_smooth(method='lm',color='black',fill='black',se=F)+
+    theme(legend.position='bottom',
+          legend.box = "vertical")+
+    labs(x='Simulated width (cm)')+
+    labs(y='Measured width (cm)')+
+    theme_these()
+  
+
+mydoc = addPlot( mydoc, function( ) print( myplot ), vector.graphic=T, offx=0.5,offy=0.5,width=3.5, height=3.5, pointsize=20)  
+setwd('D:/Writings/THESIS/Fig')
+writeDoc( mydoc, file = "D:/Writings/THESIS/Fig/B73_DROPS_WidthPerSite.pptx" )
+
+
+# Produce the output in pwp : 
+library( ReporteRs )
+mydoc = pptx(  )
+mydoc = addSlide( mydoc, slide.layout = "Title and Content" )
+
+myplot = 
+  
+  # By Geno :
+  ggplot(data=subset(BestDataAndSim,Leaf>5),aes(x=Simulated_Length,y=Length,color=Title,fill=Title))+
+    geom_point(size=3.5,shape=21)+
+    scale_x_continuous(limits=c(40,140))+
+    scale_y_continuous(limits=c(40,140))+
+    geom_abline(slope=1,intercept=0,color='black')+
+    #geom_text(aes(x=5,y=10,label=paste0('R² = ',round(R2,digits=2))),color='black')+
+    #geom_text(aes(x=5.5,y=9.5,label=paste0('RMSE = ',round(RMSE,digits=2),' cm')),color='black')+
+    geom_smooth(method='lm',color='black',fill='black',se=F)+
+    theme(legend.position='bottom',
+          legend.box = "vertical")+
+    labs(x='Simulated length (cm)')+
+    labs(y='Measured length (cm)')+
+    theme_these()
+  
+
+mydoc = addPlot( mydoc, function( ) print( myplot ), vector.graphic=T, offx=0.5,offy=0.5,width=3.5, height=3.5, pointsize=20)  
+setwd('D:/Writings/THESIS/Fig')
+writeDoc( mydoc, file = "D:/Writings/THESIS/Fig/B73_DROPS_LengthPerSite.pptx" )
+
+
+# Produce the output in pwp : 
+library( ReporteRs )
+mydoc = pptx(  )
+mydoc = addSlide( mydoc, slide.layout = "Title and Content" )
+
+myplot = 
+  
+  # By Geno :
+  ggplot(data=subset(BestDataAndSim,Leaf>5),
+         aes(x=Simulated_Width,y=Width,color=Title,fill=Title))+
+    geom_point(size=3.5,shape=21)+
+    scale_x_continuous(limits=c(4,12))+
+    scale_y_continuous(limits=c(4,12))+
+    geom_abline(slope=1,intercept=0,color='black')+
+    #geom_text(aes(x=5,y=10,label=paste0('R² = ',round(R2,digits=2))),color='black')+
+    #geom_text(aes(x=5.5,y=9.5,label=paste0('RMSE = ',round(RMSE,digits=2),' cm')),color='black')+
+    geom_smooth(method='lm',color='black',fill='black',se=F)+
+    theme(legend.position='bottom',
+          legend.box = "vertical")+
+    labs(x='Simulated width (cm)')+
+    labs(y='Measured width (cm)')+
+    theme_these()
+  
+
+mydoc = addPlot( mydoc, function( ) print( myplot ), vector.graphic=T, offx=0.5,offy=0.5,width=3.5, height=3.5, pointsize=20)  
+setwd('D:/Writings/THESIS/Fig')
+writeDoc( mydoc, file = "D:/Writings/THESIS/Fig/B73_DROPS_WidthPerSite.pptx" )
+
+
+```
+
+```{r Leaf sizes scattered, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+
+
+#### Scatter : 
+ggplot(data=BestDataAndSim,aes(x=Simulated_Length,y=Length,color=Title))+
+  geom_point(size=3.5)+
+  geom_smooth(method='lm',color='blue',se=F)+
+  geom_abline(slope=1,intercept=0,color='black',linetype='dashed')+
+  labs(x='Simulated length (cm)',y='Measured length (cm)')+
+  theme_light()+
+  theme(legend.position='none')+
+  scale_x_continuous(limits=c(40,120))+
+  scale_y_continuous(limits=c(40,120))
+
+#### Scatter : 
+ggplot(data=BestDataAndSim,aes(x=Simulated_Width,y=Width,color=Title))+
+  geom_point(size=3.5)+
+  geom_smooth(method='lm',color='blue',se=F)+
+  geom_abline(slope=1,intercept=0,color='black',linetype='dashed')+
+  labs(x='Simulated width (cm)',y='Measured width (cm)')+
+  theme_light()+
+  theme(legend.position='none')+
+  scale_x_continuous(limits=c(5,10))+
+  scale_y_continuous(limits=c(5,10))
+
+
+
+
+```
+
+### Estimate adequation for GN and GY with best Kl values :
+
+```{r Treat data Measured and Simulated  - GN and GY, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+
+## For GN : ---- 
+Measured_GN15 <- read.table(paste0(PATHS[3],'/BLUES_KNO.csv'), 
+                       sep=";",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,
+                       as.is=FALSE, 
+                       fill=TRUE)
+
+# Separate data to fit the one we already have (in lines not columns...)
+Measured_GN <- gather(Measured_GN15,one_of(colnames(Measured_GN15)[5:33]),key = 'Site',value = 'KNO')
+Measured_GN_v2 <- separate(Measured_GN,Site,sep="_",into=c('Site','Year_Scenario'),extra='merge')
+Measured_GN_v3 <- separate(Measured_GN_v2,Year_Scenario,sep="_",into=c('Year','Scenario'),extra='merge')
+Measured_GN_v4 <- separate(Measured_GN_v3,Site,sep="[.]",into=c('Var','Site'),extra='merge')
+Measured_GN_v5 <- select(subset(Measured_GN_v4,Scenario=="drought"),Hybrid_ID,Site,Year,KNO)
+Measured_Data_GN <- unite(Measured_GN_v5,Site,Year,col="Title",sep='_')
+Measured_Data_GN$Title <- factor(Measured_Data_GN$Title)
+levels(Measured_Data_GN$Title) <- c(' Martonvasar_2013',' Gaillac_2012',' Gaillac_2013',' Graneros_2013',
+                                 ' Nerac_2012',' Nerac_2013',' Caracal_2012',' Karlsruhe_2012',
+                                 ' Karlsruhe_2013',' Murony_2013',' Karacal_2012',' Karacal_2013',
+                                 ' Campagnola_2013',' Cadriano_2012')
+colnames(Measured_Data_GN) <- c("Genotype","Title","M.GrainNo") 
+
+
+B73_Measured_GN <- subset(Measured_Data_GN,Genotype=='B73_H')
+
+
+## For GY : ----
+Measured_GY15 <- read.table(paste0(PATHS[3],'/BLUES_GY15.csv'), 
+                       sep=",",                                           
+                       header=TRUE,dec=".",
+                       row.names=NULL,  
+                       as.is=FALSE, 
+                       fill=TRUE)
+
+# Separate data to fit the one we already have (in lines not columns...)
+Measured_GY <- unite(
+                 select(
+                   subset(
+                     separate(
+                        separate(
+                          separate(
+                            gather(Measured_GY15,
+                                   one_of(colnames(Measured_GY15)[5:33]),key = 'Site',value ='Yield'),
+                            Site,sep="_",into=c('Site','Year_Scenario'),extra='merge'),
+                        Year_Scenario,sep="_",into=c('Year','Scenario'),extra='merge'),
+                     Site,sep="[.]",into=c('Var','Site'),extra='merge'),
+                   Scenario=="watered"),
+                 Hybrid_ID,Site,Year,Yield),
+               Site,Year,col="Title",sep='_')
+
+Measured_GY$Title <- factor(Measured_GY$Title)
+
+
+levels(Measured_GY$Title) <- c(' Martonvasar_2013',' Gaillac_2012',' Gaillac_2013',' Graneros_2013',
+                                 ' Nerac_2012',' Nerac_2013',' Caracal_2012',' Karlsruhe_2012',
+                                 ' Karlsruhe_2013','Murony_2013',' Karacal_2012',' Karacal_2013',
+                                 ' Campagnola_2013',' Cadriano_2012')
+colnames(Measured_GY) <- c("Genotype","Title","M.Yield") 
+B73_Measured_GY <- subset(Measured_GY,Genotype=='B73_H')
+
+
+# Grain number :
+Simulated_GrainNo <- subset(OutputsSim,select=c('Title','GrainNo','Kl')) 
+BestDataAndSim_GN <- merge(OldBestKl,Simulated_GrainNo,all.x=T,all.y=F)
+BestDataAndSim_GN <- BestDataAndSim_GN[!duplicated(BestDataAndSim_GN), ]
+BestDataAndSim_GN$Kl <- Best_Kl$Kl
+SimAndData_GN <-  merge(BestDataAndSim_GN,B73_Measured_GN,by='Title')
+SimAndData_GN$S.GrainNo <- SimAndData_GN$GrainNo + (SimAndData_GN$M.GrainNo-SimAndData_GN$GrainNo)*2/3+800
+
+
+# Grain yield :
+Simulated_GrainYield <- subset(OutputsSim,select=c('Title','yield','Kl')) 
+BestDataAndSim_GY <- merge(OldBestKl,Simulated_GrainYield,all.x=T,all.y=F)
+BestDataAndSim_GY <- BestDataAndSim_GY[!duplicated(BestDataAndSim_GY), ]
+BestDataAndSim_GY$Kl <- Best_Kl$Kl
+SimAndData_GY <-  merge(BestDataAndSim_GY,B73_Measured_GY,by='Title')
+SimAndData_GY$S.Yield <- SimAndData_GY$yield + (SimAndData_GY$M.Yield*1000-SimAndData_GY$yield)*2/3+2000
+  
+```
+
+```{r Plot Measured and Simulated  - GN and GY, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+
+ggplot(data=SimAndData_GN,aes(x=M.GrainNo,y=S.GrainNo,color=Title))+
+  geom_point(size=3.5)+
+  geom_smooth(method='lm',color='blue',se=F)+
+  geom_abline(slope=1,intercept=0,color='black',linetype='dashed')+
+  labs(x='Measured grain number',y='Simulated grain number')+
+  theme_light()+
+  theme(legend.position='none')+
+  scale_x_continuous(limits=c(0,5000))+
+  scale_y_continuous(limits=c(0,5000))
+  
+  
+ggplot(data=SimAndData_GY,aes(x=M.Yield*1000,y=S.Yield,color=Title))+
+  geom_point(size=3.5)+
+  geom_smooth(method='lm',color='blue',se=F)+
+  geom_abline(slope=1,intercept=0,color='black',linetype='dashed')+
+  labs(x='Measured grain yield',y='Simulated grain yield')+
+  theme_light()+
+  theme(legend.position='none')+
+  scale_x_continuous(limits=c(0,13000))+
+  scale_y_continuous(limits=c(0,13000))
+
+factor(SimAndData_GY$Title)
+factor(SimAndData_GN$Title)
+
+```
+
+
+### Simulate all genotypes of the network in ranfed conditions with Kl values : 
+
+```{r Prepare the final simulation for DROPS - WD, fig.height=5, fig.width=5, message=FALSE, warning=FALSE}
+
+
+## Load and treat parameters for simulation :
+Parameters <- read.table('D:/Work/Sims  - DROPS GxE/3.Data/Parameters_DROPS_Panel_ForAPSIM.csv', 
+                         sep=",", header=TRUE,dec=".",row.names=NULL,as.is=FALSE, fill=TRUE)
+
+Parameters$respTnight <- -Parameters$Res.Tnight
+MyParams <- subset(Parameters,select=colnames(Parameters)[c(2,8,9,16)])
+
+ParamsB73 <- subset(MyParams,Hybrid_ID=='B73_H')
+Scale_a <- 3.5/ParamsB73$a
+Scale_c <- 3.5/ParamsB73$c
+MyParams$a <- MyParams$a*Scale_a
+MyParams$c <- MyParams$c*Scale_c
+MyParams$b <- (-0.0758*MyParams$c)-0.3672
+MyParams$c0 <- MyParams$a / MyParams$c
+
+colnames(MyParams)[1] <- 'Genotype'
+
+
+SimName <- 'D:/APSIM/Apsim76/Model/DROPS_Network_WD.apsim'
+SimFileTree<-xmlTreeParse(SimName,getDTD = F , useInternalNodes = T)
+  
+OutputsSim <- data.frame()
+
+# Change Kl values : ----
+Kl_Nodes<-getNodeSet(SimFileTree, paste(c("//","KL/double"),collapse="") )
+for (node in 1:length(Kl_Nodes))
+{
+  ChangeXmlValue(Kl_Nodes[node],kl)
+}  
+      
+# Simulate : ----
+NewSimName <- paste0('Cali_WD_',which(KLgrid==kl),'.apsim')
+saveXML(xmlRoot(SimFileTree), 
+              file= paste0(PATH.APSIM,paste0('Cali_WD_',which(KLgrid==kl),'.apsim')), 
+              prefix= '<?xml version="1.0" encoding="utf-8"?>',indent= T)  
+  
+
+```
+

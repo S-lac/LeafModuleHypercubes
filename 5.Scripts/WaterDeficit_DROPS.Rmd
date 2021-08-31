@@ -1,0 +1,187 @@
+---
+title: "DROPS - Water deficit"
+author: "Sebastien Lacube"
+date: "14 November 2017"
+output: html_document
+---
+
+
+```{r Paths, message=FALSE, warning=FALSE, include=FALSE}
+
+## ---------------
+# 1 : APSIM files 
+# 2 : Met files 
+# 3 : Data files
+# 4 : Out files
+# 5 : Scripts
+# 6 : Docs 
+# 7 : Junk
+## ---------------
+
+
+PATHS <- list.dirs(path = "D:/Work/Sims  - DROPS GxE",recursive = FALSE)
+SimName <- 'Base_Sims'
+
+PATH.APSIM <- 'D:/APSIM/Apsim76/Model/'
+
+```
+
+```{r Sources, fig.height=5, fig.width=6, message=FALSE, warning=FALSE, include=FALSE}
+
+
+# Libraries ----
+library(dplyr)
+library(maptools)
+library(rworldmap)
+library(ggplot2)
+library(RColorBrewer)
+library(akima)
+library(ggmap)
+library(rgdal)
+library(fields)
+library(ggthemes)
+library(ggThemeAssist)
+library(raster)
+library(dismo)
+library(ggplot2)
+library(RColorBrewer)
+library(nlme)
+library(gridExtra)
+library(reshape2)
+library(APSIM)
+library(FactoMineR)
+library(car)
+library(knitr)
+library(ggrepel)
+library(PerformanceAnalytics)
+library(corrplot)
+library(devtools)
+library(factoextra)
+library(plyr)
+library(sensitivity)
+library(solaR)
+library(lubridate)
+library(lattice)
+library(ReporteRs)
+library(Hmisc)
+library(scales)
+library(ggcorrplot)
+library(RSelenium)
+library(zoo)
+library(maptools)
+library(rworldmap)
+library(ggplot2)
+library(RColorBrewer)
+library(akima)
+library(ggmap)
+library(rgdal)
+library(fields)
+library(ggthemes)
+library(ggThemeAssist)
+library(raster)
+library(dismo)
+library(XML)
+
+
+# Sources ----
+source('D:/Work/R script/APSIM/MultiSimFunctions.r')
+source('D:/Work/R script/Sources/Sources.r')
+source('D:/Work/R script/Sources/LERmodel.r')
+source('D:/Work/R script/Sources/ggplot_smooth_func.R')
+source('D:/Work/R script/Sources/ThermalTime.r')
+source('D:/Work/R script/Sources/suncourse.r')
+source('D:/Work/R script/Sources/PM-FT-function.R')
+source('D:/Work/R script/Sources/PM-FAO56-function.r')
+
+# Functions ----
+theme_map <- function(base_size = 8, base_family = "") {
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          panel.background = element_blank(),
+          panel.border = element_blank(),
+          panel.grid = element_blank(),
+          panel.margin = unit(0, "lines"),
+          plot.background = element_blank(),
+          legend.position = "bottom",
+          legend.direction="horizontal",
+          legend.title=element_blank(),
+          legend.text=element_text(size=8),
+          legend.box='horizontal')
+}
+
+## Getting all data for harvest dates only (max DAS):
+Get_Harvest_Data <- function(Output_Sim,By)
+{
+  HarvestDateSim <-   
+    do.call("rbind",lapply(split(Output_Sim,By,drop=T),
+                         function(x)
+                         {
+                           Temp<-subset(x, DaysAfterSowing==max(x$DaysAfterSowing))
+                           return(Temp)
+                         }
+                       ) ## End lapply
+                      ) ## End do.call rbind  
+  return(HarvestDateSim)
+}
+
+theme_these <- 
+  function(base_size = 16, base_family = "") {
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(panel.background = element_blank(),
+          plot.background = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.position = "none",
+          legend.direction="horizontal",
+          legend.text=element_text(size=16),
+          plot.title = element_text(hjust = 0.5,margin = margin(b = + 10)),
+          strip.background = element_blank(),
+          strip.text.x = element_blank())
+  }
+
+
+```
+
+# Simulation Report
+
+
+Simulation of 250+ genotypes of the DROPS panel to test performances  
+of the model for yield/grain number around the DROPS network.  
+  
+*Do we simulate correctly DROPS network in Water deficit conditions ?*  
+
+***   
+
+```{r Load Base Sim, echo=FALSE, fig.height=2.5, fig.width=2.5, message=FALSE}
+
+# Loading XML file : ----
+ApsimFile<-paste(PATHS[1],SimName,sep='/')
+ApsimFile<-paste(ApsimFile,'apsim',sep='.')
+SimFileTree<-xmlTreeParse(ApsimFile,getDTD = F , useInternalNodes = T)
+  
+# List of SimNames : ----
+SimulationNameNode<-getNodeSet(SimFileTree, "//simulation")
+xattrs <- xpathSApply(SimFileTree, "//*/simulation/@name")
+Sims <- data.frame("Title"=xattrs)
+
+```
+
+## Summary  :
+
+- *Sites :* 9 Sites around DROPS network  
+
+- *Genotypes :* DROPS panel (250+)
+
+- *Year :* from 2011 to 2013 
+
+- *Climate :* Actual  
+
+- *Hydric scenario :* Well-watered  
+
+- *Model :* LER model with length/width  
+
+***
+
